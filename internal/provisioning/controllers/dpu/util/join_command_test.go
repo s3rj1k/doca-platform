@@ -49,4 +49,11 @@ func TestGenerateJoinCommand(t *testing.T) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(cmd).NotTo(BeEmpty())
 	})
+
+	t.Run("valid join script file generation", func(t *testing.T) {
+		generator := &KubeadmBootstrapTokenGenerator{testClient}
+		scriptFile, err := generator.GenerateJoinScriptFile(ctx, &dpuCluster)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(scriptFile).To(Equal(JoinScriptFile{}))
+	})
 }

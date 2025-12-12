@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -168,7 +169,7 @@ var (
 
 			BeforeEach(func() {
 				var err error
-				validTemplate := []byte("{{.KubeadmJoinCMD}}")
+				validTemplate := []byte("{{.KubernetesJoinCMD}}")
 				dir, err = os.MkdirTemp("", "")
 				Expect(err).ToNot(HaveOccurred())
 				Expect(os.WriteFile(filepath.Join(dir, fileName), validTemplate, 0644)).To(Succeed())
@@ -181,21 +182,21 @@ var (
 			It("test with default bf.cfg", func() {
 				for _, instIface := range installInterfaces {
 					flavor := &provisioningv1.DPUFlavor{}
-					_, err := Generate(flavor, "name", "kubeadm join", false, "", instIface, 1500, 2)
+					_, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "", instIface, 1500, 2)
 					Expect(err).NotTo(HaveOccurred())
 				}
 			})
 			It("error if custom bf.cfg does not exist", func() {
 				for _, instIface := range installInterfaces {
 					flavor := &provisioningv1.DPUFlavor{}
-					_, err := Generate(flavor, "name", "kubeadm join", false, "/files/does-not-exist", instIface, 1500, 2)
+					_, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "/files/does-not-exist", instIface, 1500, 2)
 					Expect(err).To(HaveOccurred())
 				}
 			})
 			It("generate with correctly formatted template", func() {
 				for _, instIface := range installInterfaces {
 					flavor := &provisioningv1.DPUFlavor{}
-					got, err := Generate(flavor, "name", "kubeadm join", false, filepath.Join(dir, fileName), instIface, 1500, 2)
+					got, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, filepath.Join(dir, fileName), instIface, 1500, 2)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(got).To(Equal([]byte("kubeadm join")))
 				}
@@ -234,7 +235,7 @@ var (
 			It("create trusted_sfs in bf.cfg", func() {
 				flavor.Annotations = make(map[string]string)
 				flavor.Annotations[cutil.TrustedSFCount] = "10"
-				got, err := Generate(flavor, "name", "kubeadm join", false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				got, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
 				Expect(err).NotTo(HaveOccurred())
 				parsed := &CloudConfig{}
 				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
@@ -243,7 +244,7 @@ var (
 
 			It("set DPU mode to zero-trust", func() {
 				flavor.Spec.DpuMode = provisioningv1.DpuModeType("zero-trust")
-				got, err := Generate(flavor, "name", "kubeadm join", false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				got, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
 				Expect(err).NotTo(HaveOccurred())
 				parsed := &CloudConfig{}
 				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
@@ -251,7 +252,7 @@ var (
 			})
 
 			It("install via RedFish", func() {
-				got, err := Generate(flavor, "name", "kubeadm join", false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				got, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
 				Expect(err).NotTo(HaveOccurred())
 				parsed := &CloudConfig{}
 				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
@@ -260,7 +261,7 @@ var (
 				Expect(searchFileContent(parsed, "/etc/netplan/99-dpf-comm-ch.yaml", "")).NotTo(BeTrue())
 			})
 			It("install via gNOI", func() {
-				got, err := Generate(flavor, "name", "kubeadm join", false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
+				got, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
 				Expect(err).NotTo(HaveOccurred())
 				parsed := &CloudConfig{}
 				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
@@ -269,9 +270,57 @@ var (
 				Expect(searchFileContent(parsed, "/etc/netplan/99-dpf-comm-ch.yaml", "")).To(BeTrue())
 			})
 			It("install via redfish", func() {
-				got, err := Generate(flavor, "name", "kubeadm join", false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				got, err := Generate(flavor, "name", "kubeadm join", util.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(got)).Should(ContainSubstring("pre_bmc_components_update"))
+			})
+
+			It("should not include join script file when content is empty", func() {
+				emptyScript := util.JoinScriptFile{
+					Path:        "/opt/dpf/join_script.sh",
+					Permissions: "0755",
+					Content:     "",
+				}
+				got, err := Generate(flavor, "name", "kubeadm join", emptyScript, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				Expect(err).NotTo(HaveOccurred())
+				parsed := &CloudConfig{}
+				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
+				Expect(searchFileContent(parsed, "/opt/dpf/join_script.sh", "")).NotTo(BeTrue())
+			})
+
+			It("should include join script file when content is provided", func() {
+				scriptWithContent := util.JoinScriptFile{
+					Path:        "/opt/dpf/join_script.sh",
+					Permissions: "0755",
+					Content:     "#!/bin/bash\necho 'test script'",
+				}
+				got, err := Generate(flavor, "name", "kubeadm join", scriptWithContent, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				Expect(err).NotTo(HaveOccurred())
+				parsed := &CloudConfig{}
+				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
+				Expect(searchFileContent(parsed, "/opt/dpf/join_script.sh", "echo 'test script'")).To(BeTrue())
+			})
+
+			It("should use default permissions 0755 when permissions is empty", func() {
+				scriptWithoutPermissions := util.JoinScriptFile{
+					Path:        "/opt/dpf/join_script.sh",
+					Permissions: "",
+					Content:     "#!/bin/bash\necho 'test script'",
+				}
+				got, err := Generate(flavor, "name", "kubeadm join", scriptWithoutPermissions, false, "", string(provisioningv1.InstallViaRedFish), 1500, 2)
+				Expect(err).NotTo(HaveOccurred())
+				parsed := &CloudConfig{}
+				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
+				// Find the file in write_files
+				fileFound := false
+				for _, file := range parsed.WriteFiles {
+					if file.Path == "/opt/dpf/join_script.sh" {
+						fileFound = true
+						Expect(file.Permissions).To(Equal("0755"))
+						break
+					}
+				}
+				Expect(fileFound).To(BeTrue())
 			})
 		})
 	})

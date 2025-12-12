@@ -236,7 +236,7 @@ write_files:
 
         while true
         do
-            {{.KubeadmJoinCMD}} && touch /opt/dpf/joined_cluster_successfully && exit 0
+            {{.KubernetesJoinCMD}} && touch /opt/dpf/joined_cluster_successfully && exit 0
             sleep 5 # Wait for 5 seconds before retrying
             if [ -e "/etc/kubernetes/pki/ca.crt" ]; then
                 rm -rf /etc/kubernetes/pki/ca.crt
@@ -426,6 +426,13 @@ write_files:
     permissions: '0644'
     content: |
         GRUB_CMDLINE_LINUX="{{.KernelParameters}}"
+{{end}}
+
+{{- if and .KubernetesJoinScript.Path .KubernetesJoinScript.Content}}
+  - path: {{.KubernetesJoinScript.Path}}
+    permissions: {{if .KubernetesJoinScript.Permissions}}{{.KubernetesJoinScript.Permissions}}{{else}}"0755"{{end}}
+    content: |
+{{indent 8 .KubernetesJoinScript.Content}}
 {{end}}
 
 {{- range .ConfigFiles}}

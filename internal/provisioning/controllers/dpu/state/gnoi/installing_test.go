@@ -525,7 +525,7 @@ var _ = Describe("Phase Installing", func() {
 			Eventually(func() error {
 				_, err := dmsTask.Task.GetResult()
 				return err
-			}, 10*time.Second, 1*time.Second).Should(MatchError(ContainSubstring("failed to generate KubeadmJoin command")))
+			}, 10*time.Second, 1*time.Second).Should(MatchError(ContainSubstring("failed to generate Kubernetes Join command")))
 
 			By("running again, should not transition to Error phase")
 			status, err = gnoi.Installing(ctx, dpu, &dutil.ControllerContext{
@@ -544,8 +544,16 @@ func (m *mockJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dpuC
 	return "mock join command", nil
 }
 
+func (m *mockJoinCommandGenerator) GenerateJoinScriptFile(ctx context.Context, dpuCluster *provisioningv1.DPUCluster) (dutil.JoinScriptFile, error) {
+	return dutil.JoinScriptFile{}, nil
+}
+
 type errorJoinCommandGenerator struct{}
 
 func (m *errorJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dpuCluster *provisioningv1.DPUCluster) (string, error) {
 	return "", fmt.Errorf("failed to generate join command")
+}
+
+func (m *errorJoinCommandGenerator) GenerateJoinScriptFile(ctx context.Context, dpuCluster *provisioningv1.DPUCluster) (dutil.JoinScriptFile, error) {
+	return dutil.JoinScriptFile{}, fmt.Errorf("failed to generate join script")
 }

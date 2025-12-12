@@ -554,7 +554,7 @@ var _ = Describe("DPUFlavor", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(objFetched).To(Equal(obj1))
 
-			data1, err := bfcfg.Generate(obj1, DefaultDPUName, "", false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
+			data1, err := bfcfg.Generate(obj1, DefaultDPUName, "", dutil.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
 			Expect(err).To(Succeed())
 			Expect(data1).ShouldNot(BeNil())
 
@@ -572,7 +572,7 @@ metadata:
 			err = k8sClient.Create(ctx, obj2)
 			Expect(err).NotTo(HaveOccurred())
 
-			data2, err := bfcfg.Generate(obj2, DefaultDPUName, "", false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
+			data2, err := bfcfg.Generate(obj2, DefaultDPUName, "", dutil.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
 			Expect(err).To(Succeed())
 			Expect(data2).ShouldNot(BeNil())
 
@@ -644,7 +644,7 @@ spec:
 			err = k8sClient.Create(ctx, obj)
 			Expect(err).NotTo(HaveOccurred())
 
-			data, err := bfcfg.Generate(obj, DefaultDPUName, "", false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
+			data, err := bfcfg.Generate(obj, DefaultDPUName, "", dutil.JoinScriptFile{}, false, "", string(provisioningv1.InstallViaGNOI), 1500, 2)
 			Expect(err).To(Succeed())
 			Expect(data).ShouldNot(BeNil())
 		})

@@ -79,8 +79,15 @@ func PrepareBFB(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Con
 
 	joinCommand, err := ctrlCtx.JoinCommandGenerator.GenerateJoinCommand(ctx, dc)
 	if err != nil {
-		err = fmt.Errorf("failed to generate join command: %w", err)
+		err = fmt.Errorf("failed to generate Kubernetes Join command: %w", err)
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondBFBPrepared.String(), err, "FailedToGenerateJoinCommand", err.Error()))
+		return *state, err
+	}
+
+	joinScript, err := ctrlCtx.JoinCommandGenerator.GenerateJoinScriptFile(ctx, dc)
+	if err != nil {
+		err = fmt.Errorf("failed to generate Kubernetes Join script: %w", err)
+		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondBFBPrepared.String(), err, "FailedToGenerateJoinScript", err.Error()))
 		return *state, err
 	}
 
@@ -94,7 +101,7 @@ func PrepareBFB(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Con
 		return *state, err
 	}
 
-	cfg, err := bfcfg.GenerateBFConfig(ctx, ctrlCtx.Client, ctrlCtx.Options.BFCFGTemplateFile, dpu, dpuNode, dpuDevice, flavor, joinCommand, ctrlCtx.Options.DPUInstallInterface)
+	cfg, err := bfcfg.GenerateBFConfig(ctx, ctrlCtx.Client, ctrlCtx.Options.BFCFGTemplateFile, dpu, dpuNode, dpuDevice, flavor, joinCommand, joinScript, ctrlCtx.Options.DPUInstallInterface)
 	if err != nil {
 		err = fmt.Errorf("failed to generate bf.cfg: %w", err)
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondBFBPrepared.String(), err, "FailedToGenerateBFConfig", err.Error()))

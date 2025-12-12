@@ -32,8 +32,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+type JoinScriptFile struct {
+	Path        string
+	Content     string
+	Permissions string
+}
+
 // NodeJoinCommandGenerator is an interface for generating join commands for DPU cluster nodes.
 type NodeJoinCommandGenerator interface {
+	GenerateJoinScriptFile(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinScriptFile, error)
 	GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (string, error)
 }
 
@@ -116,4 +123,9 @@ func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context
 	}
 
 	return joinCommand, nil
+}
+
+// GenerateJoinScriptFile generates a join script for a DPU cluster node.
+func (s *KubeadmBootstrapTokenGenerator) GenerateJoinScriptFile(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinScriptFile, error) {
+	return JoinScriptFile{}, nil
 }

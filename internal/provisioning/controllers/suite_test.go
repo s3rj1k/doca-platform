@@ -306,3 +306,7 @@ type mockNodeJoinCommandGenerator struct{}
 func (m *mockNodeJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (string, error) {
 	return "soup", nil
 }
+
+func (m *mockNodeJoinCommandGenerator) GenerateJoinScriptFile(ctx context.Context, dc *provisioningv1.DPUCluster) (dutil.JoinScriptFile, error) {
+	return dutil.JoinScriptFile{}, nil
+}

@@ -29,6 +29,7 @@ import (
 
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/util/reboot"
 
@@ -64,7 +65,8 @@ func getTemplate(bfbCFGFilePath string) (*template.Template, error) {
 }
 
 type BFCFGData struct {
-	KubeadmJoinCMD             string
+	KubernetesJoinCMD          string
+	KubernetesJoinScript       util.JoinScriptFile
 	DPUHostName                string
 	BFGCFGParams               []string
 	UbuntuPassword             string
@@ -94,7 +96,7 @@ type BFCFGWriteFile struct {
 	Permissions string
 }
 
-func GenerateBFConfig(ctx context.Context, c client.Client, bfCFGTemplateFile string, dpu *provisioningv1.DPU, dpuNode *provisioningv1.DPUNode, dpuDevice *provisioningv1.DPUDevice, flavor *provisioningv1.DPUFlavor, joinCommand, installInterface string) ([]byte, error) {
+func GenerateBFConfig(ctx context.Context, c client.Client, bfCFGTemplateFile string, dpu *provisioningv1.DPU, dpuNode *provisioningv1.DPUNode, dpuDevice *provisioningv1.DPUDevice, flavor *provisioningv1.DPUFlavor, joinCommand string, joinScript util.JoinScriptFile, installInterface string) ([]byte, error) {
 	logger := log.FromContext(ctx)
 	additionalReboot, err := shouldTriggerAdditionalReboot(ctx, dpuNode, dpu)
 	if err != nil {
@@ -116,7 +118,7 @@ func GenerateBFConfig(ctx context.Context, c client.Client, bfCFGTemplateFile st
 	}
 
 	controlPlaneMTU := *dpfOperatorConfigList.Items[0].Spec.Networking.ControlPlaneMTU
-	buf, err := Generate(flavor, cutil.GenerateNodeName(dpu), joinCommand, additionalReboot, bfCFGTemplateFile, installInterface, controlPlaneMTU, *dpuDevice.Spec.NumberOfPFs)
+	buf, err := Generate(flavor, cutil.GenerateNodeName(dpu), joinCommand, joinScript, additionalReboot, bfCFGTemplateFile, installInterface, controlPlaneMTU, *dpuDevice.Spec.NumberOfPFs)
 	if err != nil {
 		return nil, err
 	}
@@ -156,15 +158,16 @@ func shouldTriggerAdditionalReboot(ctx context.Context, dpuNode *provisioningv1.
 	return false, nil
 }
 
-func Generate(flavor *provisioningv1.DPUFlavor, dpuName, joinCmd string, additionalReboot bool, bfbCFGFilepath string, installInterface string, controlPlaneMTU int, numberOfPFs int) ([]byte, error) {
+func Generate(flavor *provisioningv1.DPUFlavor, dpuName, joinCommand string, joinScript util.JoinScriptFile, additionalReboot bool, bfbCFGFilepath string, installInterface string, controlPlaneMTU int, numberOfPFs int) ([]byte, error) {
 	config := &BFCFGData{
-		KubeadmJoinCMD:   joinCmd,
-		DPUHostName:      dpuName,
-		AdditionalReboot: additionalReboot,
-		KernelParameters: strings.TrimSpace(strings.Join(flavor.Spec.Grub.KernelParameters, " ")),
-		ControlPlaneMTU:  controlPlaneMTU,
-		RedfishInterface: installInterface == string(provisioningv1.InstallViaRedFish),
-		DpuMode:          string(flavor.Spec.DpuMode),
+		KubernetesJoinCMD:    joinCommand,
+		KubernetesJoinScript: joinScript,
+		DPUHostName:          dpuName,
+		AdditionalReboot:     additionalReboot,
+		KernelParameters:     strings.TrimSpace(strings.Join(flavor.Spec.Grub.KernelParameters, " ")),
+		ControlPlaneMTU:      controlPlaneMTU,
+		RedfishInterface:     installInterface == string(provisioningv1.InstallViaRedFish),
+		DpuMode:              string(flavor.Spec.DpuMode),
 	}
 
 	config.ContainerdRegistryEndpoint = flavor.Spec.ContainerdConfig.RegistryEndpoint

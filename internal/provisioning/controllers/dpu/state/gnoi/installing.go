@@ -182,13 +182,20 @@ func dmsHandler(ctx context.Context, k8sClient client.Client, inDPU *provisionin
 			return nil, err
 		}
 
-		// Generate the KubeadmJoin command.
+		// Generate the Kubernetes Join command.
 		joinCommand, err := ctrlContext.JoinCommandGenerator.GenerateJoinCommand(ctx, dc)
 		if err != nil {
-			err = fmt.Errorf("failed to generate KubeadmJoin command: %w", err)
+			err = fmt.Errorf("failed to generate Kubernetes Join command: %w", err)
 			return nil, err
 		}
-		data, err := bfcfg.GenerateBFConfig(ctx, k8sClient, ctrlContext.Options.BFCFGTemplateFile, dpu, dpuNode, dpuDevice, flavor, joinCommand, ctrlContext.Options.DPUInstallInterface)
+		// Generate the Kubernetes Join script.
+		joinScript, err := ctrlContext.JoinCommandGenerator.GenerateJoinScriptFile(ctx, dc)
+		if err != nil {
+			err = fmt.Errorf("failed to generate Kubernetes Join script: %w", err)
+			return nil, err
+		}
+
+		data, err := bfcfg.GenerateBFConfig(ctx, k8sClient, ctrlContext.Options.BFCFGTemplateFile, dpu, dpuNode, dpuDevice, flavor, joinCommand, joinScript, ctrlContext.Options.DPUInstallInterface)
 		if err != nil || data == nil {
 			err = fmt.Errorf("failed bf.cfg creation for %s/%s, err: %w", dpu.Namespace, dpu.Name, err)
 			return nil, err
