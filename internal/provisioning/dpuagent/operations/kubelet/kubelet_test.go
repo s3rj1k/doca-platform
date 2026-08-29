@@ -213,7 +213,7 @@ var _ = Describe("Kubelet", func() {
 						AgentStatus: &provisioningv1.AgentStatus{
 							Conditions: []metav1.Condition{
 								{
-									Type:   conditionType,
+									Type:   ConditionType,
 									Status: metav1.ConditionTrue,
 								},
 							},

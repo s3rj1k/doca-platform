@@ -40,7 +40,6 @@ import (
 const (
 	defaultRootFS        = "/"
 	builtinKubeletConfig = "/usr/lib/systemd/system/kubelet.service.d/90-kubelet-bluefield.conf"
-	conditionType        = "KubeletConfigured"
 	kubeadminSecretKey   = "join"
 	kubeletVersionCmd    = "kubelet --version"
 
@@ -59,6 +58,10 @@ ExecStart=
 ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
 `
 )
+
+// ConditionType is the condition the agent sets once the kubelet join has run. The provisioning
+// controller reads it, so a rename here has to break that build rather than go unnoticed.
+const ConditionType = "KubeletConfigured"
 
 type RemoveBuiltinKubelet struct {
 	rootFS      string
@@ -172,7 +175,7 @@ func (c *ConfigureKubelet) Name() string {
 }
 
 func (c *ConfigureKubelet) ConditionType() string {
-	return conditionType
+	return ConditionType
 }
 
 func (c *ConfigureKubelet) ShouldSkip(ctx *operations.Context) bool {
@@ -188,7 +191,7 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 		return fmt.Errorf("latest DPU not retrieved (this should never happen)")
 	}
 	if optCtx.LatestDPU.Status.AgentStatus != nil {
-		cond := meta.FindStatusCondition(optCtx.LatestDPU.Status.AgentStatus.Conditions, conditionType)
+		cond := meta.FindStatusCondition(optCtx.LatestDPU.Status.AgentStatus.Conditions, ConditionType)
 		if cond != nil && cond.Status == metav1.ConditionTrue {
 			klog.Infof("Kubelet already configured, skip")
 			return nil
