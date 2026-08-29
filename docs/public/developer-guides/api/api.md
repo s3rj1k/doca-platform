@@ -1711,6 +1711,7 @@ _Appears in:_
 | `maxNodes` _integer_ | MaxNodes is the max amount of node in the cluster | 1000 | Maximum: 1000 <br />Minimum: 1 <br />Optional: \{\} <br /> |
 | `kubeconfig` _string_ | Kubeconfig is the secret that contains the admin kubeconfig |  | Optional: \{\} <br /> |
 | `clusterEndpoint` _[ClusterEndpointSpec](#clusterendpointspec)_ | ClusterEndpoint contains configurations of the cluster entry point |  | Optional: \{\} <br /> |
+| `joinToken` _[JoinTokenSpec](#jointokenspec)_ | JoinToken configures the bootstrap token minted for nodes joining this cluster.<br />Only read for clusters of type static, since a kamaji cluster is managed by DPF. |  | Optional: \{\} <br /> |
 
 
 #### DPUClusterStatus
@@ -2601,6 +2602,22 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `ipRange` _[IPRange](#iprange)_ |  |  |  |
+
+
+#### JoinTokenSpec
+
+
+
+JoinTokenSpec configures the bootstrap token minted for nodes joining a DPUCluster.
+
+
+
+_Appears in:_
+- [DPUClusterSpec](#dpuclusterspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `ttl` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | TTL is how long a minted join token authenticates for. It has to cover minting<br />through BFB flashing and the DPU agent's first join attempt.<br />Six digits per component keeps the hour count inside the int64 the bounds are evaluated in,<br />and repeating components keep a compound duration such as 1h30m valid. | 2h | Format: duration <br />MaxLength: 10 <br />Pattern: `^([0-9]\{1,6\}(h\|m\|s\|ms\|us\|µs\|ns))+$` <br />Type: string <br />Optional: \{\} <br /> |
 
 
 #### K8sCluster

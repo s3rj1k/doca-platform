@@ -33,6 +33,7 @@ import (
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	operatorcontroller "github.com/nvidia/doca-platform/internal/operator/controllers"
+	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	"github.com/nvidia/doca-platform/pkg/dpucluster"
 	"github.com/nvidia/doca-platform/test/mock/dms/pkg/certs"
@@ -319,8 +320,8 @@ func newCert(key *rsa.PrivateKey) (*x509.Certificate, error) {
 // The implementation is purely a stub as this command it outputs is never run.
 type mockKubeadmJoinCommandGenerator struct{}
 
-func (m *mockKubeadmJoinCommandGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster) (string, error) {
-	return "soup", nil
+func (m *mockKubeadmJoinCommandGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster) (dutil.JoinCommand, error) {
+	return dutil.JoinCommand{Command: "soup", TokenID: "abcdef", ExpiresAt: time.Now().Add(dutil.DefaultJoinTokenTTL)}, nil
 }
 
 // mockHostUptimeReporter implements the interface for checking if a node reboot has occurred..
