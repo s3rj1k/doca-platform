@@ -118,6 +118,14 @@ var _ = Describe("DPU: cluster config", func() {
 				Expect(dpuClusterClient.Get(ctx, client.ObjectKey{Namespace: dpu.Namespace, Name: dpu.Name}, nodeInDPUCluster)).To(Succeed())
 				Expect(nodeInDPUCluster.Labels).To(HaveKeyWithValue("key1", "value1"))
 				Expect(nodeInDPUCluster.Labels).To(HaveKeyWithValue("key2", "value2"))
+				Expect(nodeInDPUCluster.Labels).To(HaveKeyWithValue(cutil.DPUNodeLabel, "true"))
+
+				// Ready and NodeEffectRemoval compare the same labels against this annotation.
+				// A mismatch sends every DPU back to ClusterConfig forever.
+				needUpdate, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(nodeInDPUCluster,
+					cutil.NodeLabelsForDPU(dpu.Spec.Cluster.NodeLabels))
+				Expect(err).To(Succeed())
+				Expect(needUpdate).To(BeFalse(), "labels just written must not read back as needing an update")
 			}
 			runForEachInterface(readyRun)
 
@@ -140,6 +148,13 @@ var _ = Describe("DPU: cluster config", func() {
 				Expect(dpuClusterClient.Get(ctx, client.ObjectKey{Namespace: dpu.Namespace, Name: dpu.Name}, nodeInDPUCluster)).To(Succeed())
 				Expect(nodeInDPUCluster.Labels).To(Not(HaveKey("key1")))
 				Expect(nodeInDPUCluster.Labels).To(HaveKeyWithValue("key2", "value2"))
+				Expect(nodeInDPUCluster.Labels).To(HaveKeyWithValue(cutil.DPUNodeLabel, "true"),
+					"DPF's own label must survive the removal of a user label")
+
+				needUpdate, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(nodeInDPUCluster,
+					cutil.NodeLabelsForDPU(dpu.Spec.Cluster.NodeLabels))
+				Expect(err).To(Succeed())
+				Expect(needUpdate).To(BeFalse())
 			}
 			runForEachInterface(removeLabelsRun)
 		})
