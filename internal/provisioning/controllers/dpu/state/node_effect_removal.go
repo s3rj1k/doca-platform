@@ -52,7 +52,9 @@ func NodeEffectRemoval(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *du
 	if ann == nil {
 		ann = map[string]string{}
 	}
-	needUpdateLabels, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(node, dpu.Spec.Cluster.NodeLabels)
+	// The comparison has to include the label DPF adds itself, since that is what was recorded
+	// as last applied when the labels were written.
+	needUpdateLabels, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(node, cutil.NodeLabelsForDPU(dpu.Spec.Cluster.NodeLabels))
 	if err != nil {
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondNodeEffectRemoved.String(), err, "UpdateLabelsOnNodeInDPUClusterError", err.Error()))
 		return *state, err

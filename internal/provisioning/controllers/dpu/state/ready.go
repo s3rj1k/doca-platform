@@ -74,7 +74,9 @@ func Ready(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Controll
 	if ann == nil {
 		ann = map[string]string{}
 	}
-	needUpdateLabels, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(node, dpu.Spec.Cluster.NodeLabels)
+	// The comparison has to include the label DPF adds itself, since that is what was recorded
+	// as last applied when the labels were written.
+	needUpdateLabels, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(node, cutil.NodeLabelsForDPU(dpu.Spec.Cluster.NodeLabels))
 	if err != nil {
 		return *state, err
 	}
@@ -83,8 +85,14 @@ func Ready(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Controll
 		return *state, err
 	}
 	if needUpdateLabels || needUpdateAnn {
+		// A node that is only missing the label DPF adds itself has nothing the user asked to
+		// change, so it takes the cheap path rather than draining on upgrade.
+		userLabelsChanged, err := cutil.NeedUpdateUserLabelsOnNodeInDPUCluster(node, dpu.Spec.Cluster.NodeLabels)
+		if err != nil {
+			return *state, err
+		}
 		// Check if applyOnLabelChange is enabled
-		if dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange != nil && *dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange {
+		if (userLabelsChanged || needUpdateAnn) && dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange != nil && *dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange {
 			// Set status field to trigger node effect
 			state.PostProvisioningNodeEffect = ptr.To(true)
 			// Transition to nodeEffect state instead of DPUClusterConfig

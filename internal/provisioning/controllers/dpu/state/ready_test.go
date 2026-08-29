@@ -94,6 +94,13 @@ var _ = Describe("DPU: Ready", func() {
 
 	// Helper function to create a node in the DPUCluster
 	createNodeInDPUCluster := func(dpu *provisioningv1.DPU, annotations map[string]string, addresses []corev1.NodeAddress) *corev1.Node {
+		// A node DPF has configured always carries its own label in the last applied record,
+		// so a caller that does not care about labels gets one that is already converged.
+		if annotations == nil {
+			annotations = map[string]string{
+				cutil.LastAppliedLabelsOnDPUKey: `{"provisioning.dpu.nvidia.com/dpu-node":"true"}`,
+			}
+		}
 		nodeInDPUCluster := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        dpu.Name,
@@ -131,7 +138,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -170,7 +177,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -203,7 +210,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				[]corev1.NodeAddress{
 					{Type: corev1.NodeInternalIP, Address: "192.168.1.1"},
 				},
@@ -269,7 +276,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -295,6 +302,35 @@ var _ = Describe("DPU: Ready", func() {
 				))
 			})
 		})
+
+		// The upgrade case. A node configured before DPF marked its own nodes has everything the
+		// user asked for and only lacks the marker, so applying it must not drain the node.
+		It("DPU: Ready: should not trigger node effect when only the DPF label is missing", func() {
+			dpu := createBasicDPU(
+				map[string]string{"old": "label"},
+				provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}, UpgradePolicy: provisioningv1.UpgradePolicy{ApplyOnLabelChange: ptr.To(true)}},
+			)
+
+			By("creating a Node in the DPUCluster whose last applied labels predate the DPF label")
+			createNodeInDPUCluster(dpu,
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label"}`},
+				nil,
+			)
+
+			runForEachInterface(func(installInterface provisioningv1.DPUInstallInterfaceType) {
+				status, err := state.Ready(ctx, dpu,
+					&dutil.ControllerContext{
+						Client: k8sClient,
+						Options: dutil.DPUOptions{
+							DPUInstallInterface: string(installInterface),
+						},
+					},
+				)
+				Expect(err).To(Succeed())
+				Expect(status.Phase).To(Equal(provisioningv1.DPUClusterConfig), "the marker is applied without a maintenance cycle")
+				Expect(status.PostProvisioningNodeEffect).To(BeNil())
+			})
+		})
 	})
 
 	Context("Label Change Scenarios", func() {
@@ -306,7 +342,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -332,7 +368,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -410,7 +446,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster with existing labels")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"existing":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -436,7 +472,7 @@ var _ = Describe("DPU: Ready", func() {
 
 			By("creating a Node in the DPUCluster with empty last applied labels")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
