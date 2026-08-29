@@ -1457,6 +1457,197 @@ func TestValidateKubernetesVersionSkew(t *testing.T) {
 		g.Expect(testClient.Delete(ctx, staticCluster)).To(Succeed())
 	})
 
+	t.Run("exempts DPUs whose flavor disables kubelet version reporting", func(t *testing.T) {
+		kamajiCluster := &provisioningv1.DPUCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kamaji-cluster-kubeletless",
+				Namespace: testNS.Name,
+			},
+			Spec: provisioningv1.DPUClusterSpec{
+				Type:       string(provisioningv1.KamajiCluster),
+				Kubeconfig: "kamaji-cluster-kubeletless-admin-kubeconfig",
+			},
+		}
+		g.Expect(testClient.Create(ctx, kamajiCluster)).To(Succeed())
+		secret := ensureClusterSecret(kamajiCluster)
+
+		flavor := &provisioningv1.DPUFlavor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubeletless-flavor",
+				Namespace: testNS.Name,
+			},
+			Spec: provisioningv1.DPUFlavorSpec{
+				DPUAgentConfig: provisioningv1.DPUAgentConfig{
+					SkipOperations: provisioningv1.DPUAgentSkipOperations{ConfigureKubelet: true},
+				},
+			},
+		}
+		g.Expect(testClient.Create(ctx, flavor)).To(Succeed())
+
+		dpu := &provisioningv1.DPU{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dpu-kubeletless",
+				Namespace: testNS.Name,
+			},
+			Spec: provisioningv1.DPUSpec{
+				SerialNumber:  "MT25066004C8",
+				DPUNodeName:   "test-node",
+				DPUDeviceName: "test-device",
+				BFB:           "test-bfb",
+				DPUFlavor:     flavor.Name,
+				Cluster: provisioningv1.K8sCluster{
+					Name:      kamajiCluster.Name,
+					Namespace: kamajiCluster.Namespace,
+				},
+				NodeEffect: provisioningv1.NodeEffect{
+					Action: provisioningv1.Action{NoEffect: ptr.To(true)},
+				},
+			},
+		}
+		g.Expect(testClient.Create(ctx, dpu)).To(Succeed())
+		patcher := patch.NewSerialPatcher(dpu, testClient)
+		// No cluster node is created for this DPU, so resolving its kubelet version would
+		// normally fail validation, and the flavor exemption is what skips the check.
+		dpu.Status = provisioningv1.DPUStatus{
+			Phase:      provisioningv1.DPUReady,
+			DPFVersion: ptr.To("v26.4.0"),
+		}
+		g.Expect(patcher.Patch(ctx, dpu, patch.WithFieldOwner("test"))).To(Succeed())
+
+		dpuClusters := []*dpucluster.Config{
+			dpucluster.NewConfig(testClient, kamajiCluster),
+		}
+
+		r := newReconciler()
+		err := r.validateKubernetesVersionSkew(ctx, &operatorv1.DPFOperatorConfig{}, dpuClusters)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(testClient.Delete(ctx, dpu)).To(Succeed())
+		g.Expect(testClient.Delete(ctx, flavor)).To(Succeed())
+		g.Expect(testClient.Delete(ctx, secret)).To(Succeed())
+		g.Expect(testClient.Delete(ctx, kamajiCluster)).To(Succeed())
+	})
+
+	// Each case drives one branch of dpuSkipsKubeletVersionReporting with a DPU that reports
+	// no kubelet version, so an exempt DPU validates and a non exempt one does not.
+	for _, tc := range []struct {
+		name        string
+		id          string                                 // used to build valid object names
+		flavorName  string                                 // the flavor the DPU names
+		createdSkip *provisioningv1.DPUAgentSkipOperations // nil creates no flavor object
+		wantExempt  bool
+	}{
+		{
+			name:        "flavor disabling kubelet configuration is exempt",
+			id:          "no-configure",
+			flavorName:  "no-configure-flavor",
+			createdSkip: &provisioningv1.DPUAgentSkipOperations{ConfigureKubelet: true},
+			wantExempt:  true,
+		},
+		{
+			name:        "flavor with neither toggle is not exempt",
+			id:          "plain",
+			flavorName:  "plain-flavor",
+			createdSkip: &provisioningv1.DPUAgentSkipOperations{},
+			wantExempt:  false,
+		},
+		{
+			// The toggle only silences the agent status field, so such a DPU still joins and
+			// still registers a node carrying a real kubelet version.
+			name:        "flavor skipping only the version check is not exempt",
+			id:          "no-version-check",
+			flavorName:  "no-version-check-flavor",
+			createdSkip: &provisioningv1.DPUAgentSkipOperations{KubeletVersionCheck: true},
+			wantExempt:  false,
+		},
+		{
+			name:        "missing flavor falls back to validating",
+			id:          "missing-flavor",
+			flavorName:  "flavor-that-does-not-exist",
+			createdSkip: nil,
+			wantExempt:  false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			suffix := tc.id
+			kamajiCluster := &provisioningv1.DPUCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "kamaji-" + suffix,
+					Namespace: testNS.Name,
+				},
+				Spec: provisioningv1.DPUClusterSpec{
+					Type:       string(provisioningv1.KamajiCluster),
+					Kubeconfig: "kamaji-" + suffix + "-admin-kubeconfig",
+				},
+			}
+			g.Expect(testClient.Create(ctx, kamajiCluster)).To(Succeed())
+			secret := ensureClusterSecret(kamajiCluster)
+
+			if tc.createdSkip != nil {
+				flavor := &provisioningv1.DPUFlavor{
+					ObjectMeta: metav1.ObjectMeta{Name: tc.flavorName, Namespace: testNS.Name},
+					Spec: provisioningv1.DPUFlavorSpec{
+						DPUAgentConfig: provisioningv1.DPUAgentConfig{SkipOperations: *tc.createdSkip},
+					},
+				}
+				g.Expect(testClient.Create(ctx, flavor)).To(Succeed())
+				defer func() { g.Expect(testClient.Delete(ctx, flavor)).To(Succeed()) }()
+			}
+
+			dpu := &provisioningv1.DPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dpu-" + suffix,
+					Namespace: testNS.Name,
+				},
+				Spec: provisioningv1.DPUSpec{
+					SerialNumber:  "MT25066004C8",
+					DPUNodeName:   "test-node",
+					DPUDeviceName: "test-device",
+					BFB:           "test-bfb",
+					DPUFlavor:     tc.flavorName,
+					Cluster: provisioningv1.K8sCluster{
+						Name:      kamajiCluster.Name,
+						Namespace: kamajiCluster.Namespace,
+					},
+					NodeEffect: provisioningv1.NodeEffect{
+						Action: provisioningv1.Action{NoEffect: ptr.To(true)},
+					},
+				},
+			}
+			g.Expect(testClient.Create(ctx, dpu)).To(Succeed())
+			patcher := patch.NewSerialPatcher(dpu, testClient)
+			dpu.Status = provisioningv1.DPUStatus{
+				Phase:      provisioningv1.DPUReady,
+				DPFVersion: ptr.To("v26.4.0"),
+			}
+			g.Expect(patcher.Patch(ctx, dpu, patch.WithFieldOwner("test"))).To(Succeed())
+
+			r := newReconciler()
+			err := r.validateKubernetesVersionSkew(ctx, &operatorv1.DPFOperatorConfig{},
+				[]*dpucluster.Config{dpucluster.NewConfig(testClient, kamajiCluster)})
+
+			if tc.wantExempt {
+				g.Expect(err).ToNot(HaveOccurred(), "an exempt DPU should not be validated")
+			} else {
+				g.Expect(err).To(HaveOccurred(), "a DPU that is not exempt should be validated")
+			}
+
+			g.Expect(testClient.Delete(ctx, dpu)).To(Succeed())
+			g.Expect(testClient.Delete(ctx, secret)).To(Succeed())
+			g.Expect(testClient.Delete(ctx, kamajiCluster)).To(Succeed())
+		})
+	}
+
+	// The CRD requires spec.dpuFlavor to be at least one character, so a DPU with no flavor
+	// cannot be created through the API. The guard is exercised directly instead.
+	t.Run("DPU without a flavor is not exempt", func(t *testing.T) {
+		r := newReconciler()
+		dpu := &provisioningv1.DPU{
+			ObjectMeta: metav1.ObjectMeta{Name: "dpu-no-flavor", Namespace: testNS.Name},
+		}
+		g.Expect(r.dpuSkipsKubeletVersionReporting(ctx, dpu)).To(BeFalse())
+	})
+
 	t.Run("passes validation when no DPUs are assigned to kamaji cluster", func(t *testing.T) {
 		kamajiCluster := &provisioningv1.DPUCluster{
 			ObjectMeta: metav1.ObjectMeta{
