@@ -1593,6 +1593,10 @@ func (in *DPUStatus) DeepCopyInto(out *DPUStatus) {
 		in, out := &in.AgentLastStartupTime, &out.AgentLastStartupTime
 		*out = (*in).DeepCopy()
 	}
+	if in.JoinTokenExpiresAt != nil {
+		in, out := &in.JoinTokenExpiresAt, &out.JoinTokenExpiresAt
+		*out = (*in).DeepCopy()
+	}
 	if in.AgentStatus != nil {
 		in, out := &in.AgentStatus, &out.AgentStatus
 		*out = new(AgentStatus)
