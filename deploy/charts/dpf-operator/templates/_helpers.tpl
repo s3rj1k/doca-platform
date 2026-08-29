@@ -31,3 +31,22 @@ Selector labels
 app.kubernetes.io/name: {{ include "dpf-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Validate and return the cluster manager. Only absent or empty falls back, so a value computed
+to false reaches the check rather than being read as unset.
+*/}}
+{{- define "dpf-operator.clusterManager" -}}
+{{- $clusterManager := .Values.clusterManager -}}
+{{- if or (kindIs "invalid" $clusterManager) (eq (toString $clusterManager) "") -}}
+{{- $clusterManager = "kamaji" -}}
+{{- end -}}
+{{/*
+Mirrors the DPUCluster spec.type contract, so an out-of-tree manager names itself the same way
+here as it does on the object. A bare name that is not one DPF ships is a typo, not a manager.
+*/}}
+{{- if not (regexMatch "^(kamaji|static|[^/]+/.+)$" $clusterManager) -}}
+{{- fail (printf "clusterManager must be \"kamaji\", \"static\", or an out-of-tree \"<prefix>/<name>\", got %v" .Values.clusterManager) -}}
+{{- end -}}
+{{- $clusterManager -}}
+{{- end }}

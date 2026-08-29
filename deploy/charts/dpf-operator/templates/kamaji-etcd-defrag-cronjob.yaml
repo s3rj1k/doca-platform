@@ -1,4 +1,4 @@
-{{ if .Values.kamajiEtcdDefrag.enabled }}
+{{ if and (eq (include "dpf-operator.clusterManager" .) "kamaji") .Values.kamajiEtcdDefrag.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
