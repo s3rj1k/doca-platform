@@ -21,14 +21,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
-	"github.com/nvidia/doca-platform/pkg/dpucluster"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -86,76 +82,40 @@ func GenerateBootstrapToken() (id string, secret string, err error) {
 	return hex.EncodeToString(idBytes), hex.EncodeToString(secretBytes), nil
 }
 
-// KubeadmBootstrapTokenGenerator is a NodeJoinCommandGenerator that generates join commands following the kubeadm bootstrap token authentication method.
-// It creates a bootstrap token secret and returns the join command.
-// This join process is based on the kubeadm implementation.
-// More details can be found in the kubeadm documentation:
-// https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-init/#bootstrap-token-authentication
-type KubeadmBootstrapTokenGenerator struct {
-	client.Client
+// JoinTokenTypeFor reports how nodes join this cluster. Only a static cluster may choose,
+// and kubeadm is the answer everywhere else.
+func JoinTokenTypeFor(dc *provisioningv1.DPUCluster) provisioningv1.JoinTokenType {
+	if dc.Spec.Type != string(provisioningv1.StaticCluster) {
+		return provisioningv1.JoinTokenKubeadm
+	}
+	if dc.Spec.JoinToken == nil || dc.Spec.JoinToken.Type == "" {
+		return provisioningv1.JoinTokenKubeadm
+	}
+
+	return dc.Spec.JoinToken.Type
 }
 
-// GenerateJoinCommand generates a join command for a DPU cluster node.
-func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error) {
-	id, secret, err := GenerateBootstrapToken()
-	if err != nil {
-		return JoinCommand{}, err
-	}
-	expiresAt := time.Now().Add(JoinTokenTTL(dc))
+// JoinCommandGenerators dispatches to the generator a cluster asked for. It is itself a
+// NodeJoinCommandGenerator, so the call site does not know a choice is being made.
+type JoinCommandGenerators struct {
+	kubeadm NodeJoinCommandGenerator
+}
 
-	// Create the bootstrap token secret.
-	bootstrapToken := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      BootstrapTokenSecretName(id),
-			Namespace: "kube-system",
-		},
-		Type: corev1.SecretTypeBootstrapToken,
-		StringData: map[string]string{
-			// This group is created by default when using kamaji clusters.
-			"auth-extra-groups": "system:bootstrappers:kubeadm:default-node-token",
-			// A static cluster may ask for a longer window, since its token has to survive
-			// BFB flashing. A kamaji cluster always gets the default.
-			"expiration":                     expiresAt.Format(time.RFC3339),
-			"usage-bootstrap-authentication": "true",
-			"usage-bootstrap-signing":        "true",
-			"description":                    "Bootstrap token for DPU cluster node join",
-			"token-id":                       id,
-			"token-secret":                   secret,
-		},
+// NewJoinCommandGenerators returns the generators this build knows how to run.
+func NewJoinCommandGenerators(c client.Client) *JoinCommandGenerators {
+	return &JoinCommandGenerators{
+		kubeadm: &KubeadmBootstrapTokenGenerator{Client: c},
 	}
+}
 
-	clusterConfig := dpucluster.NewConfig(s, dc)
-	dpuClusterClient, err := clusterConfig.Client(ctx)
-	if err != nil {
-		return JoinCommand{}, err
+// GenerateJoinCommand hands the cluster to the generator its join token type names. An
+// unknown type is an error rather than a fallback, since a wrong join shape fails on the card.
+func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error) {
+	tokenType := JoinTokenTypeFor(dc)
+	switch tokenType {
+	case provisioningv1.JoinTokenKubeadm:
+		return g.kubeadm.GenerateJoinCommand(ctx, dc)
+	default:
+		return JoinCommand{}, fmt.Errorf("no join command generator for token type %q", tokenType)
 	}
-	err = dpuClusterClient.Create(ctx, bootstrapToken)
-	if err != nil {
-		return JoinCommand{}, fmt.Errorf("failed to create bootstrap token secret: %v", err)
-	}
-	server, err := dpucluster.NewConfig(s, dc).Server(ctx)
-	if err != nil {
-		return JoinCommand{}, err
-	}
-	// Strip the scheme (http:// or https://) from the host if present.
-	// This is necessary because the join command expects a host without a scheme.
-	server = strings.TrimPrefix(server, "https://")
-	server = strings.TrimPrefix(server, "http://")
-
-	// Construct the join command
-	joinCommand := fmt.Sprintf("kubeadm join %s --token %s.%s --v=5",
-		server,
-		id,
-		secret)
-
-	// Add the CA certificate hash to the join command.
-	caCertHashes, err := clusterConfig.CACertHashes(ctx)
-	if err != nil {
-		return JoinCommand{}, err
-	}
-	for _, hash := range caCertHashes {
-		joinCommand += fmt.Sprintf(" --discovery-token-ca-cert-hash %s", hash)
-	}
-
-	return JoinCommand{Command: joinCommand, TokenID: id, ExpiresAt: expiresAt}, nil
 }

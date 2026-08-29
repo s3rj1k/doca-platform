@@ -40,6 +40,21 @@ var _ = Describe("DPUCluster joinToken", func() {
 		}
 	}
 
+	It("accepts kubeadm as a type", func() {
+		obj := clusterWithJoinToken("jointoken-kubeadm", &provisioningv1.JoinTokenSpec{
+			Type: provisioningv1.JoinTokenKubeadm,
+		})
+		Expect(k8sClient.Create(context.Background(), obj)).To(Succeed())
+		DeferCleanup(k8sClient.Delete, context.Background(), obj)
+	})
+
+	It("rejects a type no build implements", func() {
+		err := k8sClient.Create(context.Background(), clusterWithJoinToken("jointoken-rke2",
+			&provisioningv1.JoinTokenSpec{Type: "rke2"}))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("Unsupported value"))
+	})
+
 	// metav1.Duration always serializes a value of a minute or more as a compound duration, so 2h
 	// leaves the client as "2h0m0s" and the round trip is what has to be asserted.
 	DescribeTable("accepts a ttl set through the Go type",
