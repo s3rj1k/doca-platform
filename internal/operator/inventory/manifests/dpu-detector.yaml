@@ -66,6 +66,8 @@ spec:
                 operator: DoesNotExist
               - key: node-role.kubernetes.io/master
                 operator: DoesNotExist
+              - key: provisioning.dpu.nvidia.com/dpu-node
+                operator: DoesNotExist
       automountServiceAccountToken: false
       containers:
       - command:

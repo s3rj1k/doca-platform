@@ -20,6 +20,7 @@ import (
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	operatorcontroller "github.com/nvidia/doca-platform/internal/operator/controllers"
+	dnutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpunode/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -150,6 +151,99 @@ var _ = Describe("NodeReconciler Reconcile - Node Deletion", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
+		})
+	})
+
+	// A DPU carries the same PCI IDs as the card in its host, so NFD can label it as if it were
+	// a host. DMS cannot reach a DPU from a DPU, so anything that landed there has to go.
+	Context("when the node is itself a DPU", func() {
+		var dpuNode *corev1.Node
+
+		BeforeEach(func() {
+			Expect(fakeClient.Create(ctx, createDPFOperatorConfig())).To(Succeed())
+
+			dpuNode = createDPUNode()
+			dpuNode.Labels[cutil.DPUNodeLabel] = "true"
+			Expect(fakeClient.Create(ctx, dpuNode)).To(Succeed())
+		})
+
+		It("should not deploy a HostAgent Pod", func() {
+			// Set, so the Pod's absence is the fix at work rather than CreateHostAgentPod
+			// refusing for want of a registry address.
+			reconciler.Options = dnutil.HostAgentPodOptions{BFBRegistryAddress: "registry.example.com:5000"}
+
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: dpuNode.Name},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			pod := &corev1.Pod{}
+			err = fakeClient.Get(ctx, types.NamespacedName{
+				Name:      cutil.GenerateHostAgentPodName(dpuNode),
+				Namespace: operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace,
+			}, pod)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		// The HostAgent Pod registers a DPUNode for whatever node it ran on. On a DPU that
+		// object is spurious, and it stays behind after the Pod is gone.
+		It("should delete the DPUNode the HostAgent Pod registered for itself", func() {
+			spurious := &provisioningv1.DPUNode{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dpuNode.Name,
+					Namespace: operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace,
+				},
+			}
+			Expect(fakeClient.Create(ctx, spurious)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: dpuNode.Name},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			err = fakeClient.Get(ctx, client.ObjectKeyFromObject(spurious), &provisioningv1.DPUNode{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the spurious DPUNode should be deleted")
+		})
+
+		It("should ignore a node whose label is not true", func() {
+			dpuNode.Labels[cutil.DPUNodeLabel] = "false"
+			Expect(fakeClient.Update(ctx, dpuNode)).To(Succeed())
+			reconciler.Options = dnutil.HostAgentPodOptions{BFBRegistryAddress: "registry.example.com:5000"}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: dpuNode.Name},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			pod := &corev1.Pod{}
+			Expect(fakeClient.Get(ctx, types.NamespacedName{
+				Name:      cutil.GenerateHostAgentPodName(dpuNode),
+				Namespace: operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace,
+			}, pod)).To(Succeed(), "a node opted out should be treated as a host again")
+		})
+
+		It("should delete a HostAgent Pod that was deployed before the label was applied", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cutil.GenerateHostAgentPodName(dpuNode),
+					Namespace: operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "dms", Image: "dms:latest"}},
+				},
+			}
+			Expect(fakeClient.Create(ctx, pod)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: dpuNode.Name},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			err = fakeClient.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the HostAgent Pod should be deleted")
 		})
 	})
 
