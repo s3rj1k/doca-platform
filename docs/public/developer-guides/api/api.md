@@ -1605,6 +1605,57 @@ _Appears in:_
 | `status` _[DPUStatus](#dpustatus)_ |  | \{ phase:Initializing \} | Optional: \{\} <br /> |
 
 
+#### DPUAgentConfig
+
+
+
+DPUAgentConfig configures the dpu-agent that runs on the DPU node.
+
+
+
+_Appears in:_
+- [DPUFlavorSpec](#dpuflavorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `skipOperations` _[DPUAgentSkipOperations](#dpuagentskipoperations)_ | SkipOperations selects dpu-agent provisioning operations to skip on the node. |  | Optional: \{\} <br /> |
+
+
+#### DPUAgentSkipOperations
+
+
+
+DPUAgentSkipOperations selects dpu-agent provisioning operations to skip.
+Each field maps to a dpu-agent --skip-* flag and defaults to false.
+The agent rejects a kubelet sub step skip combined with configureKubelet, and DPUFlavor spec
+is immutable, so the combination is refused here rather than stranding the DPU at boot.
+
+
+
+_Appears in:_
+- [DPUAgentConfig](#dpuagentconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `sysctl` _boolean_ | Sysctl skips applying the sysctl parameters from this flavor. |  | Optional: \{\} <br /> |
+| `networkConfig` _boolean_ | NetworkConfig skips writing the DPU network configuration. |  | Optional: \{\} <br /> |
+| `dnsConfig` _boolean_ | DNSConfig skips writing the DPU resolver configuration. |  | Optional: \{\} <br /> |
+| `containerdConfig` _boolean_ | ContainerdConfig skips pointing containerd at the registry from this flavor. |  | Optional: \{\} <br /> |
+| `sfConfig` _boolean_ | SFConfig skips creating the scalable functions from this flavor. |  | Optional: \{\} <br /> |
+| `vfMac` _boolean_ | VFMac skips assigning MAC addresses to the virtual functions. |  | Optional: \{\} <br /> |
+| `ovsRawScript` _boolean_ | OVSRawScript skips running the raw OVS configuration script from this flavor. |  | Optional: \{\} <br /> |
+| `kernelCmdLine` _boolean_ | KernelCmdLine skips applying the grub kernel parameters from this flavor. |  | Optional: \{\} <br /> |
+| `removeBuiltinKubelet` _boolean_ | RemoveBuiltinKubelet skips removing the kubelet that ships in the BFB. |  | Optional: \{\} <br /> |
+| `configureKubelet` _boolean_ | ConfigureKubelet skips the whole kubelet configuration and join step. Set this when the<br />node joins by some other means, such as a distribution that does not use kubeadm. |  | Optional: \{\} <br /> |
+| `startKubelet` _boolean_ | StartKubelet skips starting the kubelet service. |  | Optional: \{\} <br /> |
+| `rebootMethodDiscovery` _boolean_ | RebootMethodDiscovery skips discovering how the DPU can be rebooted. |  | Optional: \{\} <br /> |
+| `kubeletConfigCleanup` _boolean_ | KubeletConfigCleanup skips removing the existing kubelet configuration.<br />It is one of the ConfigureKubelet sub steps and takes effect only while that step runs. |  | Optional: \{\} <br /> |
+| `kubeletStop` _boolean_ | KubeletStop skips stopping the kubelet service before the join.<br />It is one of the ConfigureKubelet sub steps and takes effect only while that step runs. |  | Optional: \{\} <br /> |
+| `kubeletSystemdDropIn` _boolean_ | KubeletSystemdDropIn skips writing the kubelet systemd drop in.<br />It is one of the ConfigureKubelet sub steps and takes effect only while that step runs. |  | Optional: \{\} <br /> |
+| `kubeletCustomizedConfig` _boolean_ | KubeletCustomizedConfig skips writing the customized kubelet configuration.<br />It is one of the ConfigureKubelet sub steps and takes effect only while that step runs. |  | Optional: \{\} <br /> |
+| `kubeletVersionCheck` _boolean_ | KubeletVersionCheck skips reading the kubelet version onto the agent status. Upgrade skew<br />validation reads the version the node itself reports, so this grants no exemption from it.<br />It is one of the ConfigureKubelet sub steps and takes effect only while that step runs. |  | Optional: \{\} <br /> |
+
+
 #### DPUCluster
 
 
@@ -1972,6 +2023,7 @@ _Appears in:_
 | `systemReservedResources` _[ResourceList](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcelist-v1-core)_ | SystemReservedResources indicates the resources that are consumed by the system (OS, OVS, DPF system etc) and are<br />not made available for DPUServices to consume. DPUServices can consume the difference between DPUResources and<br />SystemReservedResources. This field must not be specified if dpuResources are not specified. |  | Optional: \{\} <br /> |
 | `dpuMode` _[DpuModeType](#dpumodetype)_ | Specifies the DPU Mode type: one of dpu,zero-trust.<br />When not specified, defaults to "zero-trust" if the DPF deployment uses Redfish install interface,<br />otherwise defaults to "dpu". |  | Enum: [dpu zero-trust nic] <br />Optional: \{\} <br /> |
 | `hostNetworkInterfaceConfigs` _[NetworkInterfaceConfig](#networkinterfaceconfig) array_ | HostNetworkInterfaceConfigs contains the configuration for the host-side network interfaces. |  | Optional: \{\} <br /> |
+| `dpuAgentConfig` _[DPUAgentConfig](#dpuagentconfig)_ | DPUAgentConfig configures the dpu-agent that runs on the DPU node. |  | Optional: \{\} <br /> |
 
 
 

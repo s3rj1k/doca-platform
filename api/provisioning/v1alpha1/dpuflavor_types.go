@@ -83,6 +83,84 @@ type DPUFlavorSpec struct {
 	// HostNetworkInterfaceConfigs contains the configuration for the host-side network interfaces.
 	// +optional
 	HostNetworkInterfaceConfigs []NetworkInterfaceConfig `json:"hostNetworkInterfaceConfigs,omitempty"`
+
+	// DPUAgentConfig configures the dpu-agent that runs on the DPU node.
+	// +optional
+	DPUAgentConfig DPUAgentConfig `json:"dpuAgentConfig,omitempty"`
+}
+
+// DPUAgentConfig configures the dpu-agent that runs on the DPU node.
+type DPUAgentConfig struct {
+	// SkipOperations selects dpu-agent provisioning operations to skip on the node.
+	// +optional
+	SkipOperations DPUAgentSkipOperations `json:"skipOperations,omitempty"`
+}
+
+// DPUAgentSkipOperations selects dpu-agent provisioning operations to skip.
+// Each field maps to a dpu-agent --skip-* flag and defaults to false.
+// The agent rejects a kubelet sub step skip combined with configureKubelet, and DPUFlavor spec
+// is immutable, so the combination is refused here rather than stranding the DPU at boot.
+// +kubebuilder:validation:XValidation:rule="!(has(self.configureKubelet) && self.configureKubelet) || !((has(self.kubeletConfigCleanup) && self.kubeletConfigCleanup) || (has(self.kubeletStop) && self.kubeletStop) || (has(self.kubeletSystemdDropIn) && self.kubeletSystemdDropIn) || (has(self.kubeletCustomizedConfig) && self.kubeletCustomizedConfig) || (has(self.kubeletVersionCheck) && self.kubeletVersionCheck))",message="kubelet sub step skips have no effect when configureKubelet is skipped, set either configureKubelet or the sub steps but not both"
+type DPUAgentSkipOperations struct {
+	// Sysctl skips applying the sysctl parameters from this flavor.
+	// +optional
+	Sysctl bool `json:"sysctl,omitempty"`
+	// NetworkConfig skips writing the DPU network configuration.
+	// +optional
+	NetworkConfig bool `json:"networkConfig,omitempty"`
+	// DNSConfig skips writing the DPU resolver configuration.
+	// +optional
+	DNSConfig bool `json:"dnsConfig,omitempty"`
+	// ContainerdConfig skips pointing containerd at the registry from this flavor.
+	// +optional
+	ContainerdConfig bool `json:"containerdConfig,omitempty"`
+	// SFConfig skips creating the scalable functions from this flavor.
+	// +optional
+	SFConfig bool `json:"sfConfig,omitempty"`
+	// VFMac skips assigning MAC addresses to the virtual functions.
+	// +optional
+	VFMac bool `json:"vfMac,omitempty"`
+	// OVSRawScript skips running the raw OVS configuration script from this flavor.
+	// +optional
+	OVSRawScript bool `json:"ovsRawScript,omitempty"`
+	// KernelCmdLine skips applying the grub kernel parameters from this flavor.
+	// +optional
+	KernelCmdLine bool `json:"kernelCmdLine,omitempty"`
+	// RemoveBuiltinKubelet skips removing the kubelet that ships in the BFB.
+	// +optional
+	RemoveBuiltinKubelet bool `json:"removeBuiltinKubelet,omitempty"`
+	// ConfigureKubelet skips the whole kubelet configuration and join step. Set this when the
+	// node joins by some other means, such as a distribution that does not use kubeadm.
+	// +optional
+	ConfigureKubelet bool `json:"configureKubelet,omitempty"`
+	// StartKubelet skips starting the kubelet service.
+	// +optional
+	StartKubelet bool `json:"startKubelet,omitempty"`
+	// RebootMethodDiscovery skips discovering how the DPU can be rebooted.
+	// +optional
+	RebootMethodDiscovery bool `json:"rebootMethodDiscovery,omitempty"`
+
+	// KubeletConfigCleanup skips removing the existing kubelet configuration.
+	// It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+	// +optional
+	KubeletConfigCleanup bool `json:"kubeletConfigCleanup,omitempty"`
+	// KubeletStop skips stopping the kubelet service before the join.
+	// It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+	// +optional
+	KubeletStop bool `json:"kubeletStop,omitempty"`
+	// KubeletSystemdDropIn skips writing the kubelet systemd drop in.
+	// It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+	// +optional
+	KubeletSystemdDropIn bool `json:"kubeletSystemdDropIn,omitempty"`
+	// KubeletCustomizedConfig skips writing the customized kubelet configuration.
+	// It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+	// +optional
+	KubeletCustomizedConfig bool `json:"kubeletCustomizedConfig,omitempty"`
+	// KubeletVersionCheck skips reading the kubelet version onto the agent status. Upgrade skew
+	// validation reads the version the node itself reports, so this grants no exemption from it.
+	// It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+	// +optional
+	KubeletVersionCheck bool `json:"kubeletVersionCheck,omitempty"`
 }
 
 type DPUFlavorGrub struct {

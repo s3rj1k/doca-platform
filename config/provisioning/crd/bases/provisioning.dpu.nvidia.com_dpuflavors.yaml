@@ -77,6 +77,98 @@ spec:
                       registry.
                     type: string
                 type: object
+              dpuAgentConfig:
+                description: DPUAgentConfig configures the dpu-agent that runs on
+                  the DPU node.
+                properties:
+                  skipOperations:
+                    description: SkipOperations selects dpu-agent provisioning operations
+                      to skip on the node.
+                    properties:
+                      configureKubelet:
+                        description: |-
+                          ConfigureKubelet skips the whole kubelet configuration and join step. Set this when the
+                          node joins by some other means, such as a distribution that does not use kubeadm.
+                        type: boolean
+                      containerdConfig:
+                        description: ContainerdConfig skips pointing containerd at
+                          the registry from this flavor.
+                        type: boolean
+                      dnsConfig:
+                        description: DNSConfig skips writing the DPU resolver configuration.
+                        type: boolean
+                      kernelCmdLine:
+                        description: KernelCmdLine skips applying the grub kernel
+                          parameters from this flavor.
+                        type: boolean
+                      kubeletConfigCleanup:
+                        description: |-
+                          KubeletConfigCleanup skips removing the existing kubelet configuration.
+                          It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+                        type: boolean
+                      kubeletCustomizedConfig:
+                        description: |-
+                          KubeletCustomizedConfig skips writing the customized kubelet configuration.
+                          It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+                        type: boolean
+                      kubeletStop:
+                        description: |-
+                          KubeletStop skips stopping the kubelet service before the join.
+                          It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+                        type: boolean
+                      kubeletSystemdDropIn:
+                        description: |-
+                          KubeletSystemdDropIn skips writing the kubelet systemd drop in.
+                          It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+                        type: boolean
+                      kubeletVersionCheck:
+                        description: |-
+                          KubeletVersionCheck skips reading the kubelet version onto the agent status. Upgrade skew
+                          validation reads the version the node itself reports, so this grants no exemption from it.
+                          It is one of the ConfigureKubelet sub steps and takes effect only while that step runs.
+                        type: boolean
+                      networkConfig:
+                        description: NetworkConfig skips writing the DPU network configuration.
+                        type: boolean
+                      ovsRawScript:
+                        description: OVSRawScript skips running the raw OVS configuration
+                          script from this flavor.
+                        type: boolean
+                      rebootMethodDiscovery:
+                        description: RebootMethodDiscovery skips discovering how the
+                          DPU can be rebooted.
+                        type: boolean
+                      removeBuiltinKubelet:
+                        description: RemoveBuiltinKubelet skips removing the kubelet
+                          that ships in the BFB.
+                        type: boolean
+                      sfConfig:
+                        description: SFConfig skips creating the scalable functions
+                          from this flavor.
+                        type: boolean
+                      startKubelet:
+                        description: StartKubelet skips starting the kubelet service.
+                        type: boolean
+                      sysctl:
+                        description: Sysctl skips applying the sysctl parameters from
+                          this flavor.
+                        type: boolean
+                      vfMac:
+                        description: VFMac skips assigning MAC addresses to the virtual
+                          functions.
+                        type: boolean
+                    type: object
+                    x-kubernetes-validations:
+                    - message: kubelet sub step skips have no effect when configureKubelet
+                        is skipped, set either configureKubelet or the sub steps but
+                        not both
+                      rule: '!(has(self.configureKubelet) && self.configureKubelet)
+                        || !((has(self.kubeletConfigCleanup) && self.kubeletConfigCleanup)
+                        || (has(self.kubeletStop) && self.kubeletStop) || (has(self.kubeletSystemdDropIn)
+                        && self.kubeletSystemdDropIn) || (has(self.kubeletCustomizedConfig)
+                        && self.kubeletCustomizedConfig) || (has(self.kubeletVersionCheck)
+                        && self.kubeletVersionCheck))'
+                type: object
               dpuMode:
                 description: |-
                   Specifies the DPU Mode type: one of dpu,zero-trust.

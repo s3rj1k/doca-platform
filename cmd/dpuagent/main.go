@@ -77,15 +77,22 @@ func main() {
 	pflag.BoolVar(&options.SkipConfigureKubelet, "skip-configure-kubelet", false, "Skip kubelet configuration")
 	pflag.BoolVar(&options.SkipStartKubelet, "skip-start-kubelet", false, "Skip starting kubelet")
 	pflag.BoolVar(&options.SkipRebootMethodDiscovery, "skip-reboot-method-discovery", false, "Skip MFT-based reboot method discovery")
+	pflag.BoolVar(&options.SkipKubeletConfigCleanup, "skip-kubelet-config-cleanup", false, "Skip removing existing kubelet CA and kubeconfig files during kubelet configuration")
+	pflag.BoolVar(&options.SkipKubeletStop, "skip-kubelet-stop", false, "Skip stopping the kubelet service during kubelet configuration")
+	pflag.BoolVar(&options.SkipKubeletSystemdDropIn, "skip-kubelet-systemd-drop-in", false, "Skip writing the kubelet systemd drop-in during kubelet configuration")
+	pflag.BoolVar(&options.SkipKubeletCustomizedConfig, "skip-kubelet-customized-config", false, "Skip applying the customized kubelet config during kubelet configuration")
+	pflag.BoolVar(&options.SkipKubeletVersionCheck, "skip-kubelet-version-check", false, "Skip the kubelet version check during kubelet configuration")
 	pflag.Parse()
 
+	dpuFlavor := &provisioningv1.DPUFlavor{}
+	parseFileOrDie(options.DPUFlavor, YamlParserFunc, dpuFlavor)
+	options.ApplyFlavorSkips(dpuFlavor.Spec.DPUAgentConfig.SkipOperations)
+
+	// After the flavor is folded in, so a contradiction is caught however it was asked for.
 	if err := options.Validate(); err != nil {
 		klog.Errorf("failed to validate options: %v", err)
 		os.Exit(1)
 	}
-
-	dpuFlavor := &provisioningv1.DPUFlavor{}
-	parseFileOrDie(options.DPUFlavor, YamlParserFunc, dpuFlavor)
 
 	var dpuClient client.Client
 	if options.ZeroTrustMode {
