@@ -881,3 +881,113 @@ var _ = Describe("DPUClockSkewMessage", func() {
 		Expect(message(hostTime.Add(2 * time.Hour))).To(ContainSubstring("2h0m0s ahead of"))
 	})
 })
+
+func TestNeedUpdateUserLabelsOnNodeInDPUCluster(t *testing.T) {
+	nodeWith := func(lastApplied string) *corev1.Node {
+		node := &corev1.Node{}
+		if lastApplied != "" {
+			node.Annotations = map[string]string{LastAppliedLabelsOnDPUKey: lastApplied}
+		}
+		return node
+	}
+
+	// The upgrade case, which is the reason this helper exists.
+	t.Run("the DPF label alone is not a user change", func(t *testing.T) {
+		g := NewWithT(t)
+
+		changed, err := NeedUpdateUserLabelsOnNodeInDPUCluster(
+			nodeWith(`{"role":"worker"}`), map[string]string{"role": "worker"})
+
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(changed).To(BeFalse())
+	})
+
+	t.Run("a real user change is reported", func(t *testing.T) {
+		g := NewWithT(t)
+
+		changed, err := NeedUpdateUserLabelsOnNodeInDPUCluster(
+			nodeWith(`{"role":"worker","provisioning.dpu.nvidia.com/dpu-node":"true"}`),
+			map[string]string{"role": "control-plane"})
+
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(changed).To(BeTrue())
+	})
+
+	// A spec that names the marker itself must not read as a change on every pass.
+	t.Run("a spec naming the marker is not a user change", func(t *testing.T) {
+		g := NewWithT(t)
+
+		changed, err := NeedUpdateUserLabelsOnNodeInDPUCluster(
+			nodeWith(`{"role":"worker"}`),
+			map[string]string{"role": "worker", DPUNodeLabel: DPUNodeLabelValue})
+
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(changed).To(BeFalse())
+	})
+
+	t.Run("nil and empty spec labels agree", func(t *testing.T) {
+		g := NewWithT(t)
+
+		changed, err := NeedUpdateUserLabelsOnNodeInDPUCluster(
+			nodeWith(`{"provisioning.dpu.nvidia.com/dpu-node":"true"}`), nil)
+
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(changed).To(BeFalse())
+	})
+
+	t.Run("no annotation with labels wanted is a change", func(t *testing.T) {
+		g := NewWithT(t)
+
+		changed, err := NeedUpdateUserLabelsOnNodeInDPUCluster(nodeWith(""), map[string]string{"role": "worker"})
+
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(changed).To(BeTrue())
+	})
+
+	t.Run("a malformed annotation is an error", func(t *testing.T) {
+		g := NewWithT(t)
+
+		_, err := NeedUpdateUserLabelsOnNodeInDPUCluster(nodeWith("{not json"), nil)
+
+		g.Expect(err).To(HaveOccurred())
+	})
+}
+
+func TestNodeLabelsForDPU(t *testing.T) {
+	t.Run("marks the node and keeps what the DPUSet asked for", func(t *testing.T) {
+		g := NewWithT(t)
+		spec := map[string]string{"role": "worker", "zone": "a"}
+
+		got := NodeLabelsForDPU(spec)
+
+		g.Expect(got).To(HaveKeyWithValue(DPUNodeLabel, "true"))
+		g.Expect(got).To(HaveKeyWithValue("role", "worker"))
+		g.Expect(got).To(HaveKeyWithValue("zone", "a"))
+	})
+
+	t.Run("does not mutate the spec it was given", func(t *testing.T) {
+		g := NewWithT(t)
+		spec := map[string]string{"role": "worker"}
+
+		NodeLabelsForDPU(spec)
+
+		g.Expect(spec).To(HaveLen(1), "the DPU spec must not gain a label")
+		g.Expect(spec).NotTo(HaveKey(DPUNodeLabel))
+	})
+
+	t.Run("works when the DPUSet asked for nothing", func(t *testing.T) {
+		g := NewWithT(t)
+		g.Expect(NodeLabelsForDPU(nil)).To(HaveKeyWithValue(DPUNodeLabel, "true"))
+	})
+
+	// GetRemovedLabels sees the marker on both sides, so dropping a user label cannot take it
+	// with it. The round trip through the node annotation is covered in dpu_cluster_config_test.
+	t.Run("survives a user label being removed", func(t *testing.T) {
+		g := NewWithT(t)
+		before := NodeLabelsForDPU(map[string]string{"role": "worker", "zone": "a"})
+		after := NodeLabelsForDPU(map[string]string{"role": "worker"})
+
+		g.Expect(GetRemovedLabels(before, after)).To(ConsistOf("zone"))
+		g.Expect(after).To(HaveKeyWithValue(DPUNodeLabel, "true"))
+	})
+}
