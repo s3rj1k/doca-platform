@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -53,6 +54,52 @@ var _ = Describe("DPUCluster joinToken", func() {
 			&provisioningv1.JoinTokenSpec{Type: "rke2"}))
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("Unsupported value"))
+	})
+
+	// The block is opaque on purpose, so the API server has to store what it is given rather
+	// than prune keys it has no schema for.
+	It("keeps a config block it has no schema for", func() {
+		obj := clusterWithJoinToken("jointoken-config", &provisioningv1.JoinTokenSpec{
+			Type: provisioningv1.JoinTokenKubeadm,
+			Config: &runtime.RawExtension{Raw: []byte(
+				`{"somethingTheAPIHasNeverHeardOf":"kept","anotherKey":"also kept"}`)},
+		})
+		Expect(k8sClient.Create(context.Background(), obj)).To(Succeed())
+		DeferCleanup(k8sClient.Delete, context.Background(), obj)
+
+		fetched := &provisioningv1.DPUCluster{}
+		Expect(k8sClient.Get(context.Background(),
+			types.NamespacedName{Name: obj.Name, Namespace: obj.Namespace}, fetched)).To(Succeed())
+
+		Expect(fetched.Spec.JoinToken.Config).NotTo(BeNil())
+		Expect(string(fetched.Spec.JoinToken.Config.Raw)).To(ContainSubstring("somethingTheAPIHasNeverHeardOf"))
+		Expect(string(fetched.Spec.JoinToken.Config.Raw)).To(ContainSubstring("also kept"))
+	})
+
+	It("keeps a script template reference", func() {
+		obj := clusterWithJoinToken("jointoken-script-ref", &provisioningv1.JoinTokenSpec{
+			Type:              provisioningv1.JoinTokenKubeadm,
+			ScriptTemplateRef: &provisioningv1.ScriptTemplateRef{Name: "kubeadm-join-template", Key: "JOIN_SCRIPT"},
+		})
+		Expect(k8sClient.Create(context.Background(), obj)).To(Succeed())
+		DeferCleanup(k8sClient.Delete, context.Background(), obj)
+
+		fetched := &provisioningv1.DPUCluster{}
+		Expect(k8sClient.Get(context.Background(),
+			types.NamespacedName{Name: obj.Name, Namespace: obj.Namespace}, fetched)).To(Succeed())
+		Expect(fetched.Spec.JoinToken.ScriptTemplateRef).NotTo(BeNil())
+		Expect(fetched.Spec.JoinToken.ScriptTemplateRef.Name).To(Equal("kubeadm-join-template"))
+		Expect(fetched.Spec.JoinToken.ScriptTemplateRef.Key).To(Equal("JOIN_SCRIPT"))
+	})
+
+	It("rejects a script template reference naming no ConfigMap", func() {
+		err := k8sClient.Create(context.Background(), clusterWithJoinToken("jointoken-script-noname",
+			&provisioningv1.JoinTokenSpec{
+				Type:              provisioningv1.JoinTokenKubeadm,
+				ScriptTemplateRef: &provisioningv1.ScriptTemplateRef{},
+			}))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("name"))
 	})
 
 	// metav1.Duration always serializes a value of a minute or more as a compound duration, so 2h

@@ -108,10 +108,12 @@ func NewJoinCommandGenerators(c client.Client) *JoinCommandGenerators {
 	}
 }
 
-// GenerateJoinCommand hands the cluster and the DPU to the generator its join token type
-// names. An unknown type is an error rather than a fallback, since a wrong join shape fails
-// on the card.
+// GenerateJoinCommand hands the cluster and the DPU to the generator its join token type names.
+// An unknown type is an error rather than a fallback, since a wrong join shape fails on the card.
 func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, dpu *provisioningv1.DPU) (JoinCommand, error) {
+	if dpu == nil {
+		return JoinCommand{}, fmt.Errorf("a join command needs the DPU it is for")
+	}
 	tokenType := JoinTokenTypeFor(dc)
 	switch tokenType {
 	case provisioningv1.JoinTokenKubeadm:

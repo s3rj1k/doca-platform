@@ -78,6 +78,72 @@ spec:
   kubeconfig: dpu-cluster-1-admin-kubeconfig
 ```
 
+##### Replacing the join script
+
+Every join mechanism renders its command from a template, and the one DPF ships is the one the
+mechanism named by `type` was proven with. A cluster whose control plane differs can replace it with
+`joinToken.scriptTemplateRef`, naming a ConfigMap in the same namespace as the DPUCluster. `key` is
+optional and `JOIN_SCRIPT_TEMPLATE` is read when it is not set:
+
+```yaml
+spec:
+  joinToken:
+    type: kubeadm
+    scriptTemplateRef:
+      name: kubeadm-join-template
+      # key: JOIN_SCRIPT
+    config:
+      ## Any key here reaches the template, so a replacement can read ones DPF never defines.
+      myOwnKey: something
+```
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubeadm-join-template
+  namespace: dpf-operator-system
+data:
+  JOIN_SCRIPT_TEMPLATE: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "joining {{ .ClusterNamespace }}/{{ .ClusterName }} as {{ .NodeName }}"
+```
+
+The template is Go `text/template` with the hermetic [sprig](https://masterminds.github.io/sprig/)
+functions, so `env`, `expandenv` and `getHostByName` are not available. It may reference:
+
+| Field | What it is |
+| --- | --- |
+| `.Config` | `joinToken.config` merged over the defaults, see the note on quoting below |
+| `.JoinToken` | the credential this DPU presents, in the shape its mechanism uses |
+| `.NodeName` | the name the node has to register under for DPF to see it |
+| `.DPUName`, `.DPUNamespace` | the DPU the script was rendered for |
+| `.ClusterName`, `.ClusterNamespace` | the DPUCluster being joined |
+
+A mechanism may offer more. The kubeadm template also has `.APIServer` and `.CACertHashes`.
+
+Naming a key the config does not define is an error rather than an empty substitution, and a
+ConfigMap or key that cannot be read is an error rather than a fall back to the shipped script,
+since running a different script as root is worse than not joining.
+
+Values in `.Config` are checked for what would break out of a single quoted assignment, which is a
+quote, a control character or a glob metacharacter. `$`, a backtick, `;` and `|` all pass, because
+the shipped script assigns every value inside single quotes where none of them mean anything. A
+replacement has to do the same. Writing `FOO="{{ .Config.x }}"` with double quotes, or expanding a
+value unquoted, hands command substitution and word splitting to whoever can edit the DPUCluster.
+
+Replacing the script moves three responsibilities to whoever wrote it. The agent reruns the whole
+script every 30s, so every step has to be idempotent. The script must not exit 0 before the node
+holds its kubelet credentials, or DPF reports a DPU that never joined. And the node has to register
+under `.NodeName`, or DPF never sees it.
+
+The template is rendered inside the provisioning controller, with a cap on the size of the result but
+none on the work spent producing it, and the script itself then runs as root on the DPU. Write access
+to this ConfigMap is therefore worth treating as equivalent to write access to the provisioning
+controller's workload, and should be granted accordingly.
+
+
 #### Using the Kamaji Cluster Manager
 
 The DPUCluster will look like:

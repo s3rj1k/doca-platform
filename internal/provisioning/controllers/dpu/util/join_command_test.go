@@ -204,6 +204,17 @@ func TestJoinCommandGeneratorsDispatch(t *testing.T) {
 		g.Expect(stub.called).To(BeFalse(), "a wrong join shape must not be minted")
 	})
 
+	// A generator may need the DPU, so a nil one has to fail before any token is minted.
+	t.Run("a nil DPU is refused", func(t *testing.T) {
+		g := NewWithT(t)
+		stub := &stubGenerator{}
+		generators := &JoinCommandGenerators{kubeadm: stub}
+
+		_, err := generators.GenerateJoinCommand(context.Background(), staticCluster(provisioningv1.JoinTokenKubeadm), nil)
+		g.Expect(err).To(MatchError(ContainSubstring("needs the DPU")))
+		g.Expect(stub.called).To(BeFalse())
+	})
+
 	// Through the exported constructor, so that a generator built without the client is
 	// caught here rather than on a card.
 	t.Run("this build registers kubeadm", func(t *testing.T) {

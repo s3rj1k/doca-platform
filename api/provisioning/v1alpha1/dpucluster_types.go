@@ -20,6 +20,7 @@ import (
 	"github.com/nvidia/doca-platform/pkg/conditions"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -139,6 +140,31 @@ type JoinTokenSpec struct {
 	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('24h')",message="ttl has to be at most 24h so a leaked token ages out"
 	// +optional
 	TTL *metav1.Duration `json:"ttl,omitempty"`
+
+	// Config is read by the join mechanism Type names, so its keys belong to that mechanism
+	// rather than to this API, and they reach its join script template.
+	// Nothing here is validated on admission, so a bad value is reported on the DPU instead.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Config *runtime.RawExtension `json:"config,omitempty"`
+
+	// ScriptTemplateRef replaces the join script the mechanism named by Type ships with. Read
+	// from the namespace of this DPUCluster, so it cannot reach a ConfigMap the author cannot.
+	// +optional
+	ScriptTemplateRef *ScriptTemplateRef `json:"scriptTemplateRef,omitempty"`
+}
+
+// ScriptTemplateRef names a ConfigMap holding a join script template. The ConfigMap is read from
+// the namespace of the DPUCluster that names it, so it cannot reach one the author cannot read.
+type ScriptTemplateRef struct {
+	// Name is the ConfigMap holding the template.
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
+
+	// Key is the ConfigMap key holding the template. JOIN_SCRIPT_TEMPLATE is read when unset.
+	// +optional
+	Key string `json:"key,omitempty"`
 }
 
 // DPUClusterStatus defines the observed state of DPUCluster
