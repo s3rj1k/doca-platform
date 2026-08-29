@@ -39,8 +39,9 @@ type KubeadmBootstrapTokenGenerator struct {
 	client.Client
 }
 
-// GenerateJoinCommand generates a join command for a DPU cluster node.
-func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error) {
+// GenerateJoinCommand generates a join command for a DPU cluster node. The command is the same
+// for every node in a cluster, so the DPU is not read.
+func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, _ *provisioningv1.DPU) (JoinCommand, error) {
 	id, secret, err := GenerateBootstrapToken()
 	if err != nil {
 		return JoinCommand{}, err
