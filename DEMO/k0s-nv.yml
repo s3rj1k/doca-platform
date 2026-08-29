@@ -1,0 +1,1468 @@
+# Debian 13 amd64 -> single-node k0s cluster with the NVIDIA container runtime.
+# Self-contained, no inventory, no roles, no templates. Runs on localhost.
+#
+#   sudo ansible-playbook k0s-nv.yml [--check --diff]
+#     [--tags base|network|nvidia|tools|k0s|cert-manager|nfd|dpf-operator]
+#
+# The DPF operator is the last step and is also reachable on its own, without
+# touching the host or rebuilding the cluster.
+#
+#   sudo ansible-playbook k0s-nv.yml --tags dpf-operator
+#
+# That needs a running cluster with cert-manager already installed (--tags
+# k0s,cert-manager,dpf-operator does the lot). To move to a new build, bump
+# dpf_operator_version in vars, or override it for one run.
+#
+#   sudo ansible-playbook k0s-nv.yml --tags dpf-operator \
+#     -e dpf_operator_version=v0.0.0-sha.<short>
+#
+# WARNING, every run wipes and rebuilds the cluster (k0s stop + k0s reset).
+# Workloads and etcd state are lost. Opt out with -e k0s_recreate=false.
+# --check destroys nothing, command tasks do not run under it.
+#
+# Never reboots. The driver and nouveau blacklist only take effect next boot,
+# and the last task reports whether one is outstanding. runc stays the default
+# runtime. GPU pods opt in with runtimeClassName: nvidia plus a nvidia.com/gpu
+# limit, so a missing toolkit cannot break calico-node and the node with it.
+---
+- name: Debian DPU host - netplan, NVIDIA container runtime, k0s single node
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    managed_note: "Managed by Ansible: k0s-nv.yml - local edits are overwritten."
+
+    k0s_recreate: true
+
+    # Set by the GPU driver block when nouveau is swapped out without a reboot.
+    nvidia_nouveau_swapped: false
+
+    # --- Management network
+    wan_iface: wan0
+    # Placeholder. netplan matches on it, so set the real management NIC MAC.
+    wan_mac: "AA:BB:CC:DD:EE:FF"
+    bridge_iface: br-dpu
+    mgmt_ip: 172.20.136.101
+    mgmt_prefix: 24
+    mgmt_gateway: 172.20.136.1
+    dns_servers:
+      - 8.8.8.8
+      - 1.1.1.1
+    netplan_file: /etc/netplan/50-doca.yaml
+    # DPU PF0 (e.g. eno16995np0), empty = unmanaged. Up but never addressed.
+    dpu_pf0_iface: ""
+
+    # --- base
+    base_upgrade_packages: true
+    base_configure_ssh: true
+
+    # --- k0s
+    k0s_version: latest
+    k0s_bin: /usr/local/bin/k0s
+    k0s_data_dir: /var/lib/k0s
+    kubelet_root_dir: /var/lib/kubelet
+    k0s_config_dir: /etc/k0s
+    k0s_config_file: /etc/k0s/k0s.yaml
+    k0s_worker_profile: numa
+    k0s_api_sans:
+      - 169.254.1.42
+    k0s_calico_mtu: 1400
+    k0s_ready_retries: 60
+    k0s_ready_delay: 5
+
+    # --- NVIDIA container runtime
+    nvidia_containerd_dropin: /etc/k0s/containerd.d/nvidia.toml
+    nvidia_runtime_binary: /usr/bin/nvidia-container-runtime
+    nvidia_as_default_runtime: false
+    # Must match kubelet cgroupDriver (cgroupfs on this host).
+    nvidia_systemd_cgroup: false
+    # Headless. For Desktop or Xorg use nvidia_driver_packages: [nvidia-driver]
+    nvidia_install_driver: true
+    nvidia_driver_packages:
+      - nvidia-kernel-dkms
+      - nvidia-smi
+      - nvidia-persistenced
+      - libnvidia-ml1
+      - libcuda1
+      - firmware-nvidia-gsp
+    # Without the device plugin nothing advertises nvidia.com/gpu.
+    nvidia_install_device_plugin: true
+    nvidia_device_plugin_image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+    # Same guard as nfd_worker_affinity below. A DPU node has no nvidia
+    # containerd runtime, so the plugin sandbox never starts there.
+    nvidia_device_plugin_affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: provisioning.dpu.nvidia.com/dpu-node
+                  operator: DoesNotExist
+
+    # --- cert-manager
+    install_cert_manager: true
+    cert_manager_chart: oci://quay.io/jetstack/charts/cert-manager
+    cert_manager_version: latest
+    cert_manager_namespace: cert-manager
+    cert_manager_timeout: 300s
+
+    # --- node-feature-discovery
+    install_nfd: true
+    nfd_chart: oci://registry.k8s.io/nfd/charts/node-feature-discovery
+    nfd_chart_version: 0.19.0
+    nfd_namespace: node-feature-discovery
+    # Keeps the NFD worker off DPU nodes, which is why NFD is a chart install
+    # and not a kubectl apply of the upstream manifests.
+    nfd_worker_affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: provisioning.dpu.nvidia.com/dpu-node
+                  operator: DoesNotExist
+
+    # --- DPF operator (last step, needs cert-manager)
+    install_dpf_operator: true
+    # Chart repository. List the builds that exist with
+    #   curl -s https://oci.s3rj1k.fyi/v2/dpf/dpf-operator/tags/list
+    dpf_operator_registry: oci://oci.s3rj1k.fyi/dpf
+    dpf_operator_chart: "{{ dpf_operator_registry }}/dpf-operator"
+    # Pinned on purpose because these are per-commit builds. 'latest' does not
+    # exist upstream and an unpinned install would drift between runs.
+    dpf_operator_version: v0.0.0-sha.960aac4
+    dpf_operator_namespace: dpf-operator-system
+    # "static" or "kamaji". static suits this single-node, no-tenant-cluster host.
+    dpf_operator_cluster_manager: static
+    dpf_operator_timeout: 600s
+    # The chart ships the dpu-detection-rule NodeFeatureRule and NFD labels the
+    # node. DPF provisions nothing until it lands. Set false to skip the wait.
+    dpf_operator_wait_for_label: true
+    dpu_label: feature.node.kubernetes.io/dpu-enabled
+    dpu_label_retries: 24
+    dpu_label_delay: 5
+    # A static DPUCluster is adopted rather than built, so DPF needs admin credentials
+    # from this cluster. Nothing upstream can mint them.
+    dpf_create_dpucluster_kubeconfig: true
+    dpf_dpucluster_name: dpu-cluster-1
+    # The key inside the Secret is read by pkg/dpucluster and is not free to choose.
+    dpf_dpucluster_kubeconfig_secret: "{{ dpf_dpucluster_name }}-admin-kubeconfig"
+    dpf_dpucluster_kubeconfig_key: super-admin.conf
+    # Must resolve from a Pod here and from the DPU. mgmt_ip is the k0s api.address
+    # and is already in the API cert SANs.
+    dpf_dpucluster_server: "https://{{ mgmt_ip }}:6443"
+    # Zero-trust flashes the DPU over its BMC Redfish. This Caddy proxy is the
+    # load balancer registry.loadBalancerAddress must name, otherwise it is dead.
+    dpf_install_bfb_proxy: true
+    dpf_bfb_proxy_image: docker.io/library/caddy:2-alpine
+    # The bfb-registry Service the operator creates, and its port.
+    dpf_bfb_registry_service: "bfb-registry.{{ dpf_operator_namespace }}.svc.cluster.local"
+    dpf_bfb_registry_port: 8082
+
+    # --- Client tooling
+    install_kubectl: true
+    install_helm: true
+    # Owner of ~/.kube/config, so kubectl and helm work with no sudo, no flags.
+    kube_config_user: "{{ lookup('env', 'SUDO_USER') | default(lookup('env', 'USER'), true) }}"
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd_service:
+        name: systemd-resolved
+        state: restarted
+        daemon_reload: true
+
+    - name: Apply netplan
+      ansible.builtin.command: netplan apply
+      changed_when: true
+
+  pre_tasks:
+    - name: Assert this is Debian on amd64
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Debian"
+          - ansible_architecture == "x86_64"
+        fail_msg: >-
+          This playbook targets Debian/amd64 only
+          (found {{ ansible_distribution }}/{{ ansible_architecture }}).
+        success_msg: >-
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+          ({{ ansible_architecture }}) on {{ ansible_hostname }}
+
+    - name: Announce cluster recreation
+      ansible.builtin.debug:
+        msg: >-
+          k0s_recreate=true - the existing cluster will be DESTROYED
+          (k0s stop + k0s reset) and rebuilt from scratch. All workloads and
+          etcd state on this node will be lost.
+      when: k0s_recreate | bool
+
+  tasks:
+    # ===== BASE
+    - name: Base system configuration
+      tags: [base]
+      block:
+        - name: Update apt cache and upgrade packages
+          ansible.builtin.apt:
+            update_cache: true
+            upgrade: dist
+            cache_valid_time: 3600
+          when: base_upgrade_packages | bool
+
+        - name: Install base packages
+          ansible.builtin.apt:
+            name:
+              - ca-certificates
+              - gnupg
+              - openssh-server
+              - iproute2
+              - libseccomp2
+              - mokutil
+            state: present
+            update_cache: true
+
+        # --- SSH
+        - name: Configure SSH
+          when: base_configure_ssh | bool
+          block:
+            - name: Find root authorized_keys
+              ansible.builtin.find:
+                paths: /root/.ssh
+                patterns: authorized_keys
+              register: base_root_keys
+
+            - name: Find non-root authorized_keys
+              ansible.builtin.find:
+                paths: /home
+                patterns: authorized_keys
+                recurse: true
+                depth: 3
+              register: base_user_keys
+
+            - name: Refuse to disable password auth without any authorized key
+              ansible.builtin.assert:
+                that: (base_root_keys.files | length + base_user_keys.files | length) > 0
+                fail_msg: >-
+                  No authorized_keys found anywhere. Disabling
+                  PasswordAuthentication now would lock you out. Install a key
+                  first, or run with -e base_configure_ssh=false.
+
+            - name: Drop Include directives from sshd_config
+              ansible.builtin.lineinfile:
+                path: /etc/ssh/sshd_config
+                regexp: '^\s*#*\s*Include'
+                state: absent
+              notify: Restart sshd
+
+            - name: Normalise sshd_config directives
+              ansible.builtin.lineinfile:
+                path: /etc/ssh/sshd_config
+                regexp: '^\s*#*\s*{{ item.key }}\b'
+                line: "{{ item.key }} {{ item.value }}"
+                state: present
+              loop:
+                - { key: PermitRootLogin, value: prohibit-password }
+                - { key: PasswordAuthentication, value: "no" }
+                - { key: PermitEmptyPasswords, value: "no" }
+              loop_control:
+                label: "{{ item.key }}"
+              notify: Restart sshd
+
+            - name: Validate sshd configuration before it is reloaded
+              ansible.builtin.command: sshd -t
+              changed_when: false
+              check_mode: false
+
+        # --- Locale
+        - name: Set system locale
+          ansible.builtin.copy:
+            dest: /etc/default/locale
+            mode: "0644"
+            content: |
+              LANG=C.UTF-8
+
+        # --- Kernel modules and sysctl
+        - name: Load required kernel modules now
+          community.general.modprobe:
+            name: "{{ item }}"
+            state: present
+          loop:
+            - overlay
+            - br_netfilter
+          failed_when: false
+
+        - name: Persist required kernel modules
+          ansible.builtin.copy:
+            dest: /etc/modules-load.d/95-local.conf
+            mode: "0644"
+            content: |
+              overlay
+              br_netfilter
+
+        - name: Configure kernel parameters
+          ansible.builtin.copy:
+            dest: /etc/sysctl.d/95-local.conf
+            mode: "0644"
+            content: |
+              fs.inotify.max_user_instances = 8192
+              fs.inotify.max_user_watches = 524288
+              kernel.panic = 10
+              kernel.panic_on_oops = 1
+              net.bridge.bridge-nf-call-ip6tables = 1
+              net.bridge.bridge-nf-call-iptables = 1
+              net.ipv4.conf.all.rp_filter = 1
+              net.ipv4.ip_forward = 1
+              net.ipv4.tcp_congestion_control = bbr
+              net.ipv6.conf.all.disable_ipv6 = 0
+              net.ipv6.conf.all.forwarding = 1
+              vm.overcommit_memory = 1
+          register: base_sysctl
+
+        - name: Apply kernel parameters
+          ansible.builtin.command: sysctl --system
+          changed_when: false
+          when: base_sysctl is changed
+
+        # --- Unit masking
+        - name: Mask unnecessary systemd units
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            masked: true
+          loop:
+            - apparmor.service
+            - display-manager.service
+            - firewalld.service
+          failed_when: false
+
+    # ===== NETWORK
+    - name: Network configuration
+      tags: [network, netplan]
+      block:
+        - name: Install netplan and systemd-resolved
+          ansible.builtin.apt:
+            name:
+              - netplan.io
+              - systemd-resolved
+            state: present
+            update_cache: true
+
+        - name: Enable systemd-networkd and systemd-resolved
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop:
+            - systemd-networkd
+            - systemd-resolved
+
+        - name: Point /etc/resolv.conf at the systemd-resolved stub
+          ansible.builtin.file:
+            src: ../run/systemd/resolve/stub-resolv.conf
+            dest: /etc/resolv.conf
+            state: link
+            force: true
+            follow: false
+
+        - name: Create resolved.conf.d directory
+          ansible.builtin.file:
+            path: /etc/systemd/resolved.conf.d
+            state: directory
+            mode: "0755"
+
+        - name: Configure resolved fallback DNS
+          ansible.builtin.copy:
+            dest: /etc/systemd/resolved.conf.d/fallback.conf
+            mode: "0644"
+            content: |
+              [Resolve]
+              DNS={{ dns_servers[0] }}
+              FallbackDNS={{ dns_servers[1:] | join(' ') }}
+          notify: Restart systemd-resolved
+
+        - name: Deploy netplan configuration
+          ansible.builtin.copy:
+            dest: "{{ netplan_file }}"
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              # {{ managed_note }}
+              network:
+                version: 2
+                ethernets:
+                  {{ wan_iface }}:
+                    match:
+                      macaddress: "{{ wan_mac }}"
+                    set-name: "{{ wan_iface }}"
+                    dhcp4: false
+                    dhcp6: false
+                    accept-ra: false
+              {% if dpu_pf0_iface | length > 0 %}
+                  # DPU PF0 stays up, never addressed, never bridged.
+                  {{ dpu_pf0_iface }}:
+                    dhcp4: false
+                    dhcp6: false
+                    accept-ra: false
+                    optional: true
+              {% else %}
+                  # DPU PF0 unmanaged. Set dpu_pf0_iface to bring it up.
+              {% endif %}
+                bridges:
+                  {{ bridge_iface }}:
+                    interfaces: ["{{ wan_iface }}"]
+                    critical: true
+                    dhcp4: false
+                    dhcp6: false
+                    accept-ra: false
+                    macaddress: "{{ wan_mac }}"
+                    addresses:
+                      - "{{ mgmt_ip }}/{{ mgmt_prefix }}"
+                    routes:
+                      - to: "default"
+                        via: "{{ mgmt_gateway }}"
+                    nameservers:
+                      addresses:
+              {% for ns in dns_servers %}
+                        - {{ ns }}
+              {% endfor %}
+                    parameters:
+                      stp: false
+                      forward-delay: 0
+          notify: Apply netplan
+
+        - name: Validate netplan configuration
+          ansible.builtin.command: netplan generate
+          changed_when: false
+
+    - name: Apply netplan now so later tasks have working networking
+      ansible.builtin.meta: flush_handlers
+
+    - name: Network verification and legacy stack removal
+      tags: [network, netplan]
+      block:
+        - name: Read addresses on the management bridge
+          ansible.builtin.command: ip -o -4 addr show dev {{ bridge_iface }}
+          register: net_bridge_addr
+          changed_when: false
+          # Read-only, must run under --check or the gate below is moot.
+          check_mode: false
+          retries: 6
+          delay: 5
+          until: mgmt_ip in net_bridge_addr.stdout
+
+        - name: Assert the management address survived
+          ansible.builtin.assert:
+            that: mgmt_ip in net_bridge_addr.stdout
+            fail_msg: "{{ mgmt_ip }} is not on {{ bridge_iface }} - refusing to purge ifupdown."
+            success_msg: "{{ mgmt_ip }} is live on {{ bridge_iface }}."
+
+        - name: Purge ifupdown
+          ansible.builtin.apt:
+            name:
+              - ifupdown
+            state: absent
+            purge: true
+            autoremove: false
+
+        - name: Remove leftover ifupdown configuration
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/network/interfaces
+            - /etc/network/interfaces.d
+
+    # ===== NVIDIA
+    - name: NVIDIA container toolkit and driver
+      tags: [nvidia]
+      block:
+        - name: Ensure keyring directory exists
+          ansible.builtin.file:
+            path: /usr/share/keyrings
+            state: directory
+            mode: "0755"
+
+        - name: Fetch the NVIDIA repository signing key
+          ansible.builtin.get_url:
+            url: https://nvidia.github.io/libnvidia-container/gpgkey
+            dest: /usr/share/keyrings/nvidia-container-toolkit.asc
+            mode: "0644"
+          register: nvidia_key
+
+        - name: Dearmor the NVIDIA repository signing key
+          ansible.builtin.command:
+            cmd: >-
+              gpg --batch --yes --dearmor
+              -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+              /usr/share/keyrings/nvidia-container-toolkit.asc
+          when: nvidia_key is changed
+          changed_when: true
+
+        - name: Add the NVIDIA Container Toolkit repository
+          ansible.builtin.copy:
+            dest: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+            mode: "0644"
+            content: |
+              # {{ managed_note }}
+              deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /
+          register: nvidia_repo
+
+        - name: Refresh apt cache for the NVIDIA repository
+          ansible.builtin.apt:
+            update_cache: true
+          when: nvidia_repo is changed or nvidia_key is changed
+
+        - name: Install nvidia-container-toolkit
+          ansible.builtin.apt:
+            name: nvidia-container-toolkit
+            state: present
+            update_cache: true
+
+        # The wrapper execs a low-level runtime from PATH and k0s keeps runc off
+        # PATH. Without this you get "no runtime binary found from candidate list".
+        - name: Point the NVIDIA runtime at the k0s bundled runc
+          ansible.builtin.lineinfile:
+            path: /etc/nvidia-container-runtime/config.toml
+            regexp: '^\s*runtimes\s*='
+            line: 'runtimes = ["{{ k0s_data_dir }}/bin/runc", "runc", "crun"]'
+            insertafter: '^\[nvidia-container-runtime\]'
+            state: present
+
+        - name: Verify the NVIDIA runtime can resolve a low-level runtime
+          ansible.builtin.command: "{{ nvidia_runtime_binary }} --version"
+          register: nvidia_rt_check
+          changed_when: false
+          failed_when: >-
+            nvidia_rt_check.rc != 0
+            or 'runc version' not in (nvidia_rt_check.stdout + nvidia_rt_check.stderr)
+
+        # --- GPU driver
+        - name: Install the NVIDIA GPU driver
+          when: nvidia_install_driver | bool
+          block:
+            - name: Check Secure Boot state
+              ansible.builtin.command: mokutil --sb-state
+              register: nvidia_sb
+              changed_when: false
+              failed_when: false
+              check_mode: false
+
+            - name: Warn when Secure Boot would require module signing
+              ansible.builtin.debug:
+                msg: >-
+                  Secure Boot is enabled. The DKMS-built nvidia module must be
+                  signed and its key enrolled (MOK), otherwise it will not load
+                  after reboot.
+              when: "'SecureBoot enabled' in (nvidia_sb.stdout | default(''))"
+
+            # ansible_kernel is the running kernel, so it lags a kernel upgrade
+            # made earlier in this run. The metapackage covers the new one too.
+            - name: Install kernel headers and the NVIDIA driver
+              ansible.builtin.apt:
+                name: "{{ ['linux-headers-amd64', 'linux-headers-' ~ ansible_kernel]
+                          + nvidia_driver_packages }}"
+                state: present
+                update_cache: true
+
+            - name: Blacklist nouveau
+              ansible.builtin.copy:
+                dest: /etc/modprobe.d/blacklist-nouveau.conf
+                mode: "0644"
+                content: |
+                  # {{ managed_note }}
+                  blacklist nouveau
+                  blacklist lbm-nouveau
+                  options nouveau modeset=0
+                  install nouveau /bin/false
+              register: nvidia_nouveau_blacklist
+
+            - name: Rebuild the initramfs so the blacklist applies at boot
+              ansible.builtin.command: update-initramfs -u
+              when: nvidia_nouveau_blacklist is changed
+              changed_when: true
+
+            - name: Check the DKMS module built for the running kernel
+              ansible.builtin.command: dkms status
+              register: nvidia_dkms
+              changed_when: false
+              failed_when: false
+              check_mode: false
+
+            - name: Report DKMS status
+              ansible.builtin.debug:
+                msg: "{{ nvidia_dkms.stdout_lines | default(['dkms status unavailable']) }}"
+
+            # nouveau holds the card at boot, so the nvidia module cannot probe it
+            # and NVML fails in the runtime hook. Swap live to keep this reboot-free.
+            - name: Read loaded modules before the driver swap
+              ansible.builtin.slurp:
+                src: /proc/modules
+              register: nvidia_modules_pre
+
+            - name: Swap nouveau for the nvidia module
+              when: >-
+                (nvidia_modules_pre.content | b64decode).splitlines()
+                | map('regex_search', '^nouveau ')
+                | select('string') | list | length > 0
+              block:
+                # rmmod rather than modprobe -r, because the blacklist makes
+                # modprobe resolve nouveau to nothing and unload nothing at all.
+                - name: Unload nouveau
+                  ansible.builtin.command: rmmod nouveau
+                  register: nvidia_nouveau_rm
+                  changed_when: nvidia_nouveau_rm.rc == 0
+                  failed_when: false
+
+                # The return code is not proof that the module is gone, so read
+                # the module list back rather than trusting it.
+                - name: Re-read loaded modules after the unload
+                  ansible.builtin.slurp:
+                    src: /proc/modules
+                  register: nvidia_modules_post
+
+                - name: Record whether nouveau is gone
+                  ansible.builtin.set_fact:
+                    nvidia_nouveau_gone: >-
+                      {{ (nvidia_modules_post.content | b64decode).splitlines()
+                      | map('regex_search', '^nouveau ')
+                      | select('string') | list | length == 0 }}
+
+                # A console or framebuffer still bound to nouveau keeps the
+                # module busy. That is the one case that still needs a reboot.
+                - name: Report that nouveau could not be unloaded
+                  ansible.builtin.debug:
+                    msg: >-
+                      nouveau could not be unloaded
+                      ({{ nvidia_nouveau_rm.stderr | default('') | trim }}).
+                      The blacklist is in place, so a reboot will free the GPU.
+                  when: not nvidia_nouveau_gone | bool
+
+                - name: Load the nvidia module
+                  ansible.builtin.command: modprobe nvidia
+                  register: nvidia_modprobe
+                  changed_when: nvidia_modprobe.rc == 0
+                  failed_when: false
+                  when: nvidia_nouveau_gone | bool
+
+                # nvidia-smi alone does not create the device nodes when no
+                # X server or persistence daemon has run yet.
+                - name: Create the /dev/nvidia* device nodes
+                  ansible.builtin.command: nvidia-modprobe -c 0 -u
+                  register: nvidia_modprobe_dev
+                  changed_when: nvidia_modprobe_dev.rc == 0
+                  failed_when: false
+                  when: nvidia_modprobe.rc | default(1) == 0
+
+                - name: Record that the driver was swapped in live
+                  ansible.builtin.set_fact:
+                    nvidia_nouveau_swapped: "{{ nvidia_modprobe.rc | default(1) == 0 }}"
+
+        - name: Check whether the nvidia driver is live
+          ansible.builtin.command: nvidia-smi
+          register: nvidia_smi
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Read loaded kernel modules
+          ansible.builtin.slurp:
+            src: /proc/modules
+          register: nvidia_proc_modules
+
+        - name: Record driver state for the final report
+          ansible.builtin.set_fact:
+            nvidia_driver_live: "{{ nvidia_smi.rc == 0 }}"
+            nvidia_nouveau_loaded: >-
+              {{ (nvidia_proc_modules.content | b64decode).splitlines()
+                 | map('regex_search', '^nouveau ') | select('string') | list | length > 0 }}
+            nvidia_module_loaded: >-
+              {{ (nvidia_proc_modules.content | b64decode).splitlines()
+                 | map('regex_search', '^nvidia ') | select('string') | list | length > 0 }}
+
+    # ===== TOOLS
+    - name: Client tooling
+      tags: [tools]
+      block:
+        - name: Install kubectl
+          when: install_kubectl | bool
+          block:
+            - name: Get latest kubectl version
+              ansible.builtin.uri:
+                url: https://api.github.com/repos/kubernetes/kubernetes/releases/latest
+                return_content: true
+              register: kubectl_release
+              check_mode: false
+              failed_when: false
+
+            - name: Set kubectl version
+              ansible.builtin.set_fact:
+                kubectl_version: "{{ kubectl_release.json.tag_name }}"
+              when:
+                - kubectl_release.status | default(0) == 200
+                - kubectl_release.json.tag_name is defined
+
+            - name: Download kubectl binary ({{ kubectl_version | default('unresolved') }})
+              ansible.builtin.get_url:
+                url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl"
+                dest: /usr/local/bin/kubectl
+                owner: root
+                group: root
+                mode: "0755"
+              when: kubectl_version | default('') | trim | length > 0
+
+        - name: Install Helm
+          when: install_helm | bool
+          block:
+            - name: Get latest Helm version
+              ansible.builtin.uri:
+                url: https://api.github.com/repos/helm/helm/releases/latest
+                return_content: true
+              register: helm_release
+              check_mode: false
+              failed_when: false
+
+            - name: Set Helm version
+              ansible.builtin.set_fact:
+                helm_version: "{{ helm_release.json.tag_name }}"
+              when:
+                - helm_release.status | default(0) == 200
+                - helm_release.json.tag_name is defined
+
+            # unarchive is a no-op under --check and the copy below would then
+            # fail on a missing source.
+            - name: Install Helm ({{ helm_version | default('unresolved') }})
+              when:
+                - helm_version | default('') | trim | length > 0
+                - not ansible_check_mode
+              block:
+                - name: Create a scratch directory for the Helm archive
+                  ansible.builtin.tempfile:
+                    state: directory
+                    suffix: helm
+                  register: helm_tmp
+
+                - name: Download and unpack Helm
+                  ansible.builtin.unarchive:
+                    src: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+                    dest: "{{ helm_tmp.path }}"
+                    remote_src: true
+                    extra_opts: [--strip-components=1]
+
+                - name: Install the Helm binary
+                  ansible.builtin.copy:
+                    src: "{{ helm_tmp.path }}/helm"
+                    dest: /usr/local/bin/helm
+                    remote_src: true
+                    owner: root
+                    group: root
+                    mode: "0755"
+              always:
+                - name: Remove the scratch directory
+                  ansible.builtin.file:
+                    path: "{{ helm_tmp.path }}"
+                    state: absent
+                  when: helm_tmp.path is defined
+
+            - name: Report the Helm version a real run would install
+              ansible.builtin.debug:
+                msg: "Would install Helm {{ helm_version | default('unresolved') }}"
+              when: ansible_check_mode
+
+    # ===== K0S
+    # Reset with the OLD binary first, it needs one and it removes the unit.
+    # Then new binary, config, service, start.
+    - name: k0s cluster
+      tags: [k0s]
+      block:
+        - name: Resolve the latest stable k0s version
+          ansible.builtin.uri:
+            url: https://docs.k0sproject.io/stable.txt
+            return_content: true
+          register: k0s_stable
+          check_mode: false
+          when: k0s_version == "latest"
+
+        - name: Set the k0s version to install
+          ansible.builtin.set_fact:
+            k0s_version_resolved: >-
+              {{ (k0s_stable.content | default('') | trim)
+                 if k0s_version == "latest" else k0s_version }}
+
+        - name: Assert a k0s version was resolved
+          ansible.builtin.assert:
+            that: k0s_version_resolved | length > 0
+            fail_msg: >-
+              Could not resolve a k0s version. docs.k0sproject.io/stable.txt was
+              unreachable; pin one explicitly with -e k0s_version=v1.36.3+k0s.2
+
+        - name: Derive release asset names
+          ansible.builtin.set_fact:
+            k0s_asset_name: "k0s-{{ k0s_version_resolved }}-amd64"
+            # '+' is not valid unencoded in a GitHub release path.
+            k0s_release_path: "{{ k0s_version_resolved | replace('+', '%2B') }}"
+
+        - name: Report the target version
+          ansible.builtin.debug:
+            msg: "Installing k0s {{ k0s_version_resolved }}"
+
+        # --- Tear the existing cluster down
+        - name: Check for an existing k0s binary
+          ansible.builtin.stat:
+            path: "{{ k0s_bin }}"
+          register: k0s_existing
+
+        - name: Destroy the existing cluster
+          when:
+            - k0s_recreate | bool
+            - k0s_existing.stat.exists
+          block:
+            - name: Stop k0s
+              ansible.builtin.command: "{{ k0s_bin }} stop"
+              register: k0s_stop
+              changed_when: k0s_stop.rc == 0
+              failed_when: false
+
+            - name: Reset k0s (wipes etcd, containerd state and the systemd unit)
+              ansible.builtin.command: >-
+                {{ k0s_bin }} reset
+                --kubelet-root-dir={{ kubelet_root_dir }}
+                --debug
+              register: k0s_reset
+              changed_when: k0s_reset.rc == 0
+              failed_when: false
+
+            - name: Reload systemd after the unit was removed
+              ansible.builtin.systemd_service:
+                daemon_reload: true
+
+            # Stale cpu_manager_state makes kubelet fail with "policy changed".
+            - name: Remove stale kubelet state
+              ansible.builtin.file:
+                path: "{{ kubelet_root_dir }}/{{ item }}"
+                state: absent
+              loop:
+                - cpu_manager_state
+                - memory_manager_state
+
+        # --- Install the binary
+        - name: Fetch release checksums
+          ansible.builtin.uri:
+            url: "https://github.com/k0sproject/k0s/releases/download/{{ k0s_release_path }}/sha256sums.txt"
+            return_content: true
+          register: k0s_sums
+          check_mode: false
+
+        - name: Extract the amd64 checksum
+          ansible.builtin.set_fact:
+            k0s_sha256: >-
+              {{ (k0s_sums.content.splitlines()
+                  | select('search', '\*' ~ (k0s_asset_name | regex_escape) ~ '$')
+                  | list | first).split()[0] }}
+
+        - name: Download the k0s binary
+          ansible.builtin.get_url:
+            url: "https://github.com/k0sproject/k0s/releases/download/{{ k0s_release_path }}/{{ k0s_asset_name | replace('+', '%2B') }}"
+            dest: "{{ k0s_bin }}"
+            checksum: "sha256:{{ k0s_sha256 }}"
+            owner: root
+            group: root
+            mode: "0755"
+
+        # --- Configuration
+        - name: Create k0s configuration directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+          loop:
+            - "{{ k0s_config_dir }}"
+            - "{{ k0s_config_dir }}/containerd.d"
+            - "{{ k0s_data_dir }}/manifests/nvidia"
+
+        - name: Deploy the cluster configuration
+          ansible.builtin.copy:
+            dest: "{{ k0s_config_file }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # {{ managed_note }}
+
+              apiVersion: k0s.k0sproject.io/v1beta1
+              kind: ClusterConfig
+              metadata:
+                name: k0s
+                namespace: kube-system
+              spec:
+                api:
+                  address: {{ mgmt_ip }}
+                  k0sApiPort: 9443
+                  sans:
+              {% for san in k0s_api_sans %}
+                    - {{ san }}
+              {% endfor %}
+                telemetry:
+                  enabled: false
+                storage:
+                  type: etcd
+                  etcd:
+                    peerAddress: {{ mgmt_ip }}
+                network:
+                  provider: calico
+                  dualStack:
+                    enabled: false
+                  calico:
+                    mode: vxlan
+                    mtu: {{ k0s_calico_mtu }}
+                    overlay: Always
+                    ipAutodetectionMethod: can-reach=8.8.8.8
+                    envVars:
+                      FELIX_IGNORELOOSERPF: "true"
+                      FELIX_ALLOWVXLANPACKETSFROMWORKLOADS: "true"
+                workerProfiles:
+                  - name: numa
+                    values:
+                      topologyManagerPolicy: "best-effort"
+                      cpuManagerPolicy: "static"
+                      cpuManagerPolicyOptions:
+                        full-pcpus-only: "true"
+                        distribute-cpus-across-numa: "true"
+                      reservedSystemCPUs: "0"
+                      reservedMemory:
+                        - limits:
+                            memory: 2Gi
+                          numaNode: 0
+                      kubeReservedCgroup: ""
+                  - name: dpu
+                    values:
+                      topologyManagerPolicy: "best-effort"
+                      cpuManagerPolicy: "static"
+                      cpuManagerPolicyOptions:
+                        full-pcpus-only: "true"
+                        distribute-cpus-across-numa: "true"
+                      reservedSystemCPUs: "0"
+                      reservedMemory:
+                        - limits:
+                            memory: 2Gi
+                          numaNode: 0
+                      kubeReservedCgroup: ""
+
+        - name: Deploy the containerd NVIDIA runtime drop-in
+          ansible.builtin.copy:
+            dest: "{{ nvidia_containerd_dropin }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # {{ managed_note }}
+              # containerd 2.x, config v3.
+              {% if nvidia_as_default_runtime %}
+              # WARNING, nvidia is the DEFAULT runtime. A missing toolkit then
+              # fails every pod sandbox and the node goes NotReady.
+              {% else %}
+              # runc is the default. GPU pods opt in via runtimeClassName: nvidia.
+              {% endif %}
+              # SystemdCgroup must match kubelet cgroupDriver
+              # ({{ 'systemd' if nvidia_systemd_cgroup else 'cgroupfs' }}).
+              version = 3
+
+              [plugins]
+                [plugins.'io.containerd.cri.v1.runtime']
+                  [plugins.'io.containerd.cri.v1.runtime'.containerd]
+                    default_runtime_name = '{{ "nvidia" if nvidia_as_default_runtime else "runc" }}'
+                    [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes]
+
+                      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+                        runtime_type = 'io.containerd.runc.v2'
+                        [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+                          SystemdCgroup = {{ nvidia_systemd_cgroup | lower }}
+
+                      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.nvidia]
+                        runtime_type = 'io.containerd.runc.v2'
+                        privileged_without_host_devices = false
+                        sandboxer = 'podsandbox'
+                        [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.nvidia.options]
+                          BinaryName = '{{ nvidia_runtime_binary }}'
+                          SystemdCgroup = {{ nvidia_systemd_cgroup | lower }}
+
+        # The k0s manifest deployer auto-applies manifests/<stack>/.
+        - name: Deploy the nvidia RuntimeClass manifest
+          ansible.builtin.copy:
+            dest: "{{ k0s_data_dir }}/manifests/nvidia/runtimeclass.yaml"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # {{ managed_note }}
+              apiVersion: node.k8s.io/v1
+              kind: RuntimeClass
+              metadata:
+                name: nvidia
+              handler: nvidia
+
+        - name: Deploy the NVIDIA device plugin manifest
+          ansible.builtin.copy:
+            dest: "{{ k0s_data_dir }}/manifests/nvidia/device-plugin.yaml"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # {{ managed_note }}. runtimeClassName is required here.
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: nvidia-device-plugin-daemonset
+                namespace: kube-system
+              spec:
+                selector:
+                  matchLabels:
+                    name: nvidia-device-plugin-ds
+                updateStrategy:
+                  type: RollingUpdate
+                template:
+                  metadata:
+                    labels:
+                      name: nvidia-device-plugin-ds
+                  spec:
+                    runtimeClassName: nvidia
+                    priorityClassName: system-node-critical
+                    # Keeps the plugin off DPU nodes, which cannot satisfy the
+                    # runtimeClassName above and wedge in ContainerCreating.
+                    affinity: {{ nvidia_device_plugin_affinity | to_json }}
+                    tolerations:
+                      - key: nvidia.com/gpu
+                        operator: Exists
+                        effect: NoSchedule
+                    containers:
+                      - name: nvidia-device-plugin-ctr
+                        image: {{ nvidia_device_plugin_image }}
+                        env:
+                          - name: FAIL_ON_INIT_ERROR
+                            value: "false"
+                        securityContext:
+                          allowPrivilegeEscalation: false
+                          capabilities:
+                            drop: ["ALL"]
+                        volumeMounts:
+                          - name: device-plugin
+                            mountPath: /var/lib/kubelet/device-plugins
+                    volumes:
+                      - name: device-plugin
+                        hostPath:
+                          path: {{ kubelet_root_dir }}/device-plugins
+          when: nvidia_install_device_plugin | bool
+
+        - name: Remove the device plugin manifest when disabled
+          ansible.builtin.file:
+            path: "{{ k0s_data_dir }}/manifests/nvidia/device-plugin.yaml"
+            state: absent
+          when: not (nvidia_install_device_plugin | bool)
+
+        # --- Install and start
+        - name: Check whether the k0scontroller unit exists
+          ansible.builtin.stat:
+            path: /etc/systemd/system/k0scontroller.service
+          register: k0s_unit
+
+        - name: Install the k0s controller service
+          ansible.builtin.command: >-
+            {{ k0s_bin }} install controller
+            --enable-dynamic-config
+            --disable-components=konnectivity-server
+            --enable-worker
+            --no-taints
+            --profile {{ k0s_worker_profile }}
+            --config {{ k0s_config_file }}
+            --kubelet-root-dir={{ kubelet_root_dir }}
+            --debug
+          when: not k0s_unit.stat.exists
+          changed_when: true
+
+        - name: Start k0s
+          ansible.builtin.systemd_service:
+            name: k0scontroller
+            enabled: true
+            state: started
+            daemon_reload: true
+
+        # --- Wait for the cluster
+        - name: Wait for the Kubernetes API to report ready
+          ansible.builtin.command: "{{ k0s_bin }} kubectl get --raw /readyz"
+          register: k0s_readyz
+          until: k0s_readyz.rc == 0
+          retries: "{{ k0s_ready_retries }}"
+          delay: "{{ k0s_ready_delay }}"
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if the API never came up
+          ansible.builtin.fail:
+            msg: >-
+              Kubernetes API not ready after
+              {{ k0s_ready_retries | int * k0s_ready_delay | int }}s.
+              Check: journalctl -u k0scontroller -n 200
+          when: k0s_readyz.rc != 0
+
+        # kubectl wait --all exits 1 on an empty list, so the Node object has to
+        # exist before we can wait on its condition.
+        - name: Wait for the node to register with the API
+          ansible.builtin.command: "{{ k0s_bin }} kubectl get node --output=name"
+          register: k0s_node_registered
+          until: k0s_node_registered.rc == 0 and k0s_node_registered.stdout != ''
+          retries: "{{ k0s_ready_retries }}"
+          delay: "{{ k0s_ready_delay }}"
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if the node never registered
+          ansible.builtin.fail:
+            msg: >-
+              No node registered with the API after
+              {{ k0s_ready_retries | int * k0s_ready_delay | int }}s.
+              The controller runs with --enable-worker, so check the embedded
+              kubelet: journalctl -u k0scontroller -n 200 | grep kubelet
+          when: k0s_node_registered.stdout == ''
+
+        - name: Wait for the node to become Ready
+          ansible.builtin.command: >-
+            {{ k0s_bin }} kubectl wait --for=condition=Ready node --all --timeout=600s
+          changed_when: false
+
+        # Pods started before the driver swap sit in CrashLoopBackOff with a
+        # five-minute backoff, so drop them and let them retry against it.
+        - name: Restart the device plugin after a live driver swap
+          ansible.builtin.command: >-
+            {{ k0s_bin }} kubectl -n kube-system delete pod
+            --selector=name=nvidia-device-plugin-ds --ignore-not-found
+          when:
+            - nvidia_install_device_plugin | bool
+            - nvidia_nouveau_swapped | bool
+          changed_when: true
+
+        # The device plugin only goes Ready once the nvidia driver is live.
+        # Waiting on --all without it would burn 10 x 600s and fail the run.
+        - name: Wait for kube-system pods to become Ready
+          ansible.builtin.command: >-
+            {{ k0s_bin }} kubectl -n kube-system wait --for=condition=Ready pod
+            {{ '--all' if nvidia_driver_live | default(false) | bool
+            else '--selector=name!=nvidia-device-plugin-ds' }}
+            --timeout=600s
+          register: k0s_pods_ready
+          until: k0s_pods_ready.rc == 0
+          retries: 10
+          delay: 15
+          changed_when: false
+
+        # --- kubeconfig
+        - name: Generate the admin kubeconfig
+          ansible.builtin.command: "{{ k0s_bin }} kubeconfig admin"
+          register: k0s_kubeconfig
+          changed_when: false
+          no_log: true
+
+        - name: Resolve the kubeconfig owner's home directory
+          ansible.builtin.getent:
+            database: passwd
+            key: "{{ kube_config_user }}"
+
+        - name: Set the kubeconfig destination
+          ansible.builtin.set_fact:
+            kube_home: "{{ ansible_facts.getent_passwd[kube_config_user][4] }}"
+
+        - name: Create .kube directories
+          ansible.builtin.file:
+            path: "{{ item.path }}/.kube"
+            state: directory
+            owner: "{{ item.owner }}"
+            group: "{{ item.owner }}"
+            mode: "0700"
+          loop:
+            - { path: "/root", owner: "root" }
+            - { path: "{{ kube_home }}", owner: "{{ kube_config_user }}" }
+          loop_control:
+            label: "{{ item.path }}/.kube"
+
+        - name: Write kubeconfig so kubectl and helm work out of the box
+          ansible.builtin.copy:
+            content: "{{ k0s_kubeconfig.stdout }}\n"
+            dest: "{{ item.path }}/.kube/config"
+            owner: "{{ item.owner }}"
+            group: "{{ item.owner }}"
+            mode: "0600"
+          loop:
+            - { path: "/root", owner: "root" }
+            - { path: "{{ kube_home }}", owner: "{{ kube_config_user }}" }
+          loop_control:
+            label: "{{ item.path }}/.kube/config"
+          no_log: true
+
+        - name: Collect cluster state
+          ansible.builtin.command: "{{ k0s_bin }} kubectl get nodes,pods -A -o wide"
+          register: k0s_state
+          changed_when: false
+
+        - name: Show cluster state
+          ansible.builtin.debug:
+            msg: "{{ k0s_state.stdout_lines }}"
+
+    # ===== CERT-MANAGER
+    - name: cert-manager
+      tags: [cert-manager]
+      when: install_cert_manager | bool
+      block:
+        # crds.enabled installs the CRDs the DPF provisioning Certificates need.
+        - name: Install cert-manager ({{ cert_manager_version }})
+          ansible.builtin.command: >-
+            helm upgrade --install cert-manager {{ cert_manager_chart }}
+            --kubeconfig /root/.kube/config
+            --namespace {{ cert_manager_namespace }} --create-namespace
+            {{ '' if cert_manager_version == 'latest' else '--version ' ~ cert_manager_version }}
+            --set crds.enabled=true
+            --wait --timeout {{ cert_manager_timeout }}
+          register: cert_manager_helm
+          changed_when: >-
+            'has been installed' in cert_manager_helm.stdout
+            or 'has been upgraded' in cert_manager_helm.stdout
+
+    # ===== NODE-FEATURE-DISCOVERY
+    - name: node-feature-discovery
+      tags: [nfd]
+      when: install_nfd | bool
+      block:
+        - name: Install node-feature-discovery ({{ nfd_chart_version }})
+          ansible.builtin.command: >-
+            helm upgrade --install nfd {{ nfd_chart }}
+            --kubeconfig /root/.kube/config
+            --namespace {{ nfd_namespace }} --create-namespace
+            {{ '' if nfd_chart_version == 'latest' else '--version ' ~ nfd_chart_version }}
+            --set-json 'worker.affinity={{ nfd_worker_affinity | to_json }}'
+          register: nfd_helm
+          changed_when: >-
+            'has been installed' in nfd_helm.stdout
+            or 'has been upgraded' in nfd_helm.stdout
+
+    # ===== DPF OPERATOR
+    # Last step. The operator's webhooks need cert-manager and its CRDs are
+    # what everything DPF-side is configured through afterwards.
+    - name: DPF operator
+      tags: [dpf-operator]
+      when: install_dpf_operator | bool
+      block:
+        - name: Install dpf-operator ({{ dpf_operator_version }})
+          ansible.builtin.command: >-
+            helm upgrade --install dpf-operator {{ dpf_operator_chart }}
+            --kubeconfig /root/.kube/config
+            --namespace {{ dpf_operator_namespace }} --create-namespace
+            {{ '' if dpf_operator_version == 'latest' else '--version ' ~ dpf_operator_version }}
+            --set clusterManager={{ dpf_operator_cluster_manager }}
+            --wait --timeout {{ dpf_operator_timeout }}
+          register: dpf_operator_helm
+          changed_when: >-
+            'has been installed' in dpf_operator_helm.stdout
+            or 'has been upgraded' in dpf_operator_helm.stdout
+
+        # --- DPUCluster admin kubeconfig
+        # Output is byte-stable across runs, so a re-run reports no change.
+        - name: Generate the DPUCluster admin kubeconfig
+          ansible.builtin.command: "{{ k0s_bin }} kubeconfig admin"
+          register: dpf_dpucluster_kubeconfig
+          changed_when: false
+          check_mode: false
+          no_log: true
+          when: dpf_create_dpucluster_kubeconfig | bool
+
+        - name: Pin the DPUCluster kubeconfig to {{ dpf_dpucluster_server }}
+          ansible.builtin.set_fact:
+            # tls-server-name is dropped because it pins SNI to a name the DPU
+            # cannot resolve. k0s does not emit it today.
+            dpf_dpucluster_kubeconfig_content: >-
+              {{ _kc | combine({'clusters': [
+                   _kc.clusters[0] | combine({'cluster':
+                     _kc.clusters[0].cluster
+                       | combine({'server': dpf_dpucluster_server})
+                       | dict2items | rejectattr('key', 'eq', 'tls-server-name') | items2dict
+                   })
+                 ]}) }}
+          vars:
+            _kc: "{{ dpf_dpucluster_kubeconfig.stdout | from_yaml }}"
+          no_log: true
+          when:
+            - dpf_create_dpucluster_kubeconfig | bool
+            - dpf_dpucluster_kubeconfig.stdout is defined
+
+        - name: Create the {{ dpf_dpucluster_kubeconfig_secret }} Secret
+          ansible.builtin.command:
+            cmd: kubectl --kubeconfig /root/.kube/config apply -f -
+            stdin: "{{ _secret | to_nice_yaml }}"
+          vars:
+            _secret:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: "{{ dpf_dpucluster_kubeconfig_secret }}"
+                namespace: "{{ dpf_operator_namespace }}"
+              type: Opaque
+              # data rather than stringData, which is write-only and would make
+              # apply report a change on every run. Keys are not templated in vars.
+              data: "{{ {dpf_dpucluster_kubeconfig_key: dpf_dpucluster_kubeconfig_content | to_nice_yaml | b64encode} }}"
+          register: dpf_dpucluster_secret
+          changed_when: "'unchanged' not in dpf_dpucluster_secret.stdout"
+          no_log: true
+          when:
+            - dpf_create_dpucluster_kubeconfig | bool
+            - dpf_dpucluster_kubeconfig_content is defined
+
+        # --- BFB registry proxy for Redfish install
+        # Caddy bridges node port 80 to the in-cluster bfb-registry Service.
+        # Nothing uses it unless registry.loadBalancerAddress names this node.
+        - name: Deploy the BFB registry proxy (Caddy)
+          ansible.builtin.command:
+            cmd: kubectl --kubeconfig /root/.kube/config apply -f -
+            stdin: "{{ _proxy | to_nice_yaml }}"
+          vars:
+            _proxy:
+              apiVersion: v1
+              kind: List
+              items:
+                - apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: bfb-registry-proxy
+                    namespace: "{{ dpf_operator_namespace }}"
+                  data:
+                    Caddyfile: ":80 {\n    reverse_proxy {{ dpf_bfb_registry_service }}:{{ dpf_bfb_registry_port }}\n}\n"
+                - apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: bfb-registry-proxy
+                    namespace: "{{ dpf_operator_namespace }}"
+                    labels: { app: bfb-registry-proxy }
+                  spec:
+                    replicas: 1
+                    selector:
+                      matchLabels: { app: bfb-registry-proxy }
+                    template:
+                      metadata:
+                        labels: { app: bfb-registry-proxy }
+                      spec:
+                        hostNetwork: true
+                        dnsPolicy: ClusterFirstWithHostNet
+                        containers:
+                          - name: caddy
+                            image: "{{ dpf_bfb_proxy_image }}"
+                            args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+                            ports:
+                              - containerPort: 80
+                            volumeMounts:
+                              - { name: config, mountPath: /etc/caddy }
+                        volumes:
+                          - name: config
+                            configMap: { name: bfb-registry-proxy }
+          register: dpf_bfb_proxy
+          changed_when: "'unchanged' not in dpf_bfb_proxy.stdout"
+          when: dpf_install_bfb_proxy | bool
+
+        # An NFD that runs but never labels anything is the failure that wastes
+        # the most time, so the step is not done until the label is really there.
+        - name: Wait for {{ dpu_label }}=true on the control-plane node
+          ansible.builtin.command: >-
+            kubectl --kubeconfig /root/.kube/config get nodes
+            -l node-role.kubernetes.io/control-plane,{{ dpu_label }}=true
+            -o name
+          register: dpu_labelled
+          until: dpu_labelled.stdout | trim | length > 0
+          retries: "{{ dpu_label_retries }}"
+          delay: "{{ dpu_label_delay }}"
+          changed_when: false
+          check_mode: false
+          # The task below reports why. Do not die with a bare retry error.
+          failed_when: false
+          when: dpf_operator_wait_for_label | bool
+
+        - name: Fail if the DPU was never detected
+          ansible.builtin.fail:
+            msg: >-
+              {{ dpu_label }}=true is not set on the control-plane node after
+              {{ dpu_label_retries | int * dpu_label_delay | int }}s. DPF
+              provisions nothing until it appears. Check the rule and the worker:
+              kubectl get nodefeaturerule dpu-detection-rule -o yaml;
+              kubectl -n {{ nfd_namespace }} get pods -o wide
+          when:
+            - dpf_operator_wait_for_label | bool
+            - not ansible_check_mode
+            - dpu_labelled.stdout | default('') | trim | length == 0
+
+  post_tasks:
+    - name: Check for a distro reboot-required marker
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_marker
+
+    - name: Find the newest installed kernel
+      ansible.builtin.shell:
+        cmd: ls -1 /boot/vmlinuz-* | sed 's|.*/vmlinuz-||' | sort -V | tail -1
+      register: newest_kernel
+      changed_when: false
+      check_mode: false
+
+    - name: Build the list of reboot reasons
+      ansible.builtin.set_fact:
+        reboot_reasons: >-
+          {{
+            ([] if not reboot_marker.stat.exists
+                else ['/var/run/reboot-required is present'])
+            + ([] if newest_kernel.stdout | default('') | trim
+                         in ['', ansible_kernel]
+                else ['a newer kernel is installed: '
+                      ~ (newest_kernel.stdout | trim)
+                      ~ ' (running ' ~ ansible_kernel ~ ')'])
+            + ([] if not (nvidia_install_driver | bool)
+                    or (nvidia_driver_live | default(false) | bool)
+                else ['the NVIDIA driver is installed but not active'
+                      ~ (' (nouveau still holds the card)'
+                         if nvidia_nouveau_loaded | default(false) | bool else '')])
+          }}
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            [
+              'node        : ' ~ ansible_hostname ~ ' (' ~ mgmt_ip ~ ' on ' ~ bridge_iface ~ ')',
+              'k0s         : ' ~ (k0s_version_resolved | default('unchanged')),
+              'kubeconfig  : ~' ~ kube_config_user ~ '/.kube/config (kubectl and helm work as-is)',
+              'gpu runtime : RuntimeClass nvidia, runc remains the default runtime',
+              'gpu driver  : ' ~ ('active, nvidia-smi works'
+                                  if nvidia_driver_live | default(false) | bool
+                                  else 'installed, NOT yet active'),
+              'gpu plugin  : ' ~ ('deployed' if nvidia_install_device_plugin | bool else 'disabled'),
+              'cert-manager: ' ~ (cert_manager_version if install_cert_manager | bool else 'disabled'),
+              'nfd         : ' ~ (nfd_chart_version if install_nfd | bool else 'disabled'),
+              'dpf-operator: ' ~ (dpf_operator_version ~ ' (clusterManager=' ~ dpf_operator_cluster_manager ~ ')'
+                                 if install_dpf_operator | bool else 'disabled'),
+              'dpucluster  : ' ~ (dpf_dpucluster_kubeconfig_secret ~ ' -> ' ~ dpf_dpucluster_server
+                                  if (install_dpf_operator | bool)
+                                     and (dpf_create_dpucluster_kubeconfig | bool)
+                                  else 'kubeconfig Secret not created'),
+            ]
+            + (['reboot      : NOT required']
+               if reboot_reasons | length == 0
+               else ['reboot      : REQUIRED -> ' ~ (reboot_reasons | join('; '))])
+          }}
+
+    - name: Reboot notice
+      ansible.builtin.debug:
+        msg: >-
+          A reboot is required to finish this run. The cluster is up and will
+          come back on its own; after the reboot the nvidia module replaces
+          nouveau and the device plugin starts advertising nvidia.com/gpu.
+          Run: sudo reboot
+      when: reboot_reasons | length > 0
