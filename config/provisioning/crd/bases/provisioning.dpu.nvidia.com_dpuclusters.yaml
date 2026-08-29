@@ -102,6 +102,29 @@ spec:
                     - virtualRouterID
                     type: object
                 type: object
+              joinToken:
+                description: |-
+                  JoinToken configures the bootstrap token minted for nodes joining this cluster.
+                  Only read for clusters of type static, since a kamaji cluster is managed by DPF.
+                properties:
+                  ttl:
+                    default: 2h
+                    description: |-
+                      TTL is how long a minted join token authenticates for. It has to cover minting
+                      through BFB flashing and the DPU agent's first join attempt.
+                      Six digits per component keeps the hour count inside the int64 the bounds are evaluated in,
+                      and repeating components keep a compound duration such as 1h30m valid.
+                    format: duration
+                    maxLength: 10
+                    pattern: ^([0-9]{1,6}(h|m|s|ms|us|µs|ns))+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: ttl has to be at least 10m so a token outlives BFB
+                        flashing
+                      rule: duration(self) >= duration('10m')
+                    - message: ttl has to be at most 24h so a leaked token ages out
+                      rule: duration(self) <= duration('24h')
+                type: object
               kubeconfig:
                 description: Kubeconfig is the secret that contains the admin kubeconfig
                 type: string

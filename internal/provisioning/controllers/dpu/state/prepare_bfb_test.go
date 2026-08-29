@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
@@ -43,11 +44,15 @@ type mockJoinCommandGenerator struct {
 	errorMsg    string
 }
 
-func (m *mockJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (string, error) {
+func (m *mockJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (dutil.JoinCommand, error) {
 	if m.returnError {
-		return "", fmt.Errorf("%s", m.errorMsg)
+		return dutil.JoinCommand{}, fmt.Errorf("%s", m.errorMsg)
 	}
-	return "kubeadm join 10.0.0.1:6443 --token abc123.xyz789", nil
+	return dutil.JoinCommand{
+		Command:   "kubeadm join 10.0.0.1:6443 --token abc123.xyz789",
+		TokenID:   "abc123",
+		ExpiresAt: time.Now().Add(dutil.JoinTokenTTL(dc)),
+	}, nil
 }
 
 var _ = Describe("DPU: PrepareBFB", func() {

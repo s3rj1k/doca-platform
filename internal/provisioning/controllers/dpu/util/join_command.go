@@ -32,9 +32,37 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// DefaultJoinTokenTTL is how long a minted join token authenticates for when the DPUCluster
+// does not ask for something else. It is also what a kamaji cluster always gets.
+const DefaultJoinTokenTTL = 2 * time.Hour
+
+// JoinCommand is a rendered join command together with the token behind it, so a caller can
+// record which token a DPU was given and when it stops working.
+type JoinCommand struct {
+	// Command is the join command the DPU agent executes.
+	Command string
+	// TokenID names the bootstrap token Secret in the DPU cluster.
+	TokenID string
+	// ExpiresAt is when the token stops authenticating.
+	ExpiresAt time.Time
+}
+
 // NodeJoinCommandGenerator is an interface for generating join commands for DPU cluster nodes.
 type NodeJoinCommandGenerator interface {
-	GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (string, error)
+	GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error)
+}
+
+// JoinTokenTTL reports how long a token minted for this cluster should live. Only a static
+// cluster may ask for something other than the default, since kamaji clusters are DPF managed.
+func JoinTokenTTL(dc *provisioningv1.DPUCluster) time.Duration {
+	if dc.Spec.Type != string(provisioningv1.StaticCluster) {
+		return DefaultJoinTokenTTL
+	}
+	if dc.Spec.JoinToken == nil || dc.Spec.JoinToken.TTL == nil || dc.Spec.JoinToken.TTL.Duration <= 0 {
+		return DefaultJoinTokenTTL
+	}
+
+	return dc.Spec.JoinToken.TTL.Duration
 }
 
 // BootstrapTokenSecretName is how a bootstrap token id names its Secret. The name is fixed by
@@ -68,11 +96,12 @@ type KubeadmBootstrapTokenGenerator struct {
 }
 
 // GenerateJoinCommand generates a join command for a DPU cluster node.
-func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (string, error) {
+func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error) {
 	id, secret, err := GenerateBootstrapToken()
 	if err != nil {
-		return "", err
+		return JoinCommand{}, err
 	}
+	expiresAt := time.Now().Add(JoinTokenTTL(dc))
 
 	// Create the bootstrap token secret.
 	bootstrapToken := &corev1.Secret{
@@ -84,8 +113,9 @@ func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context
 		StringData: map[string]string{
 			// This group is created by default when using kamaji clusters.
 			"auth-extra-groups": "system:bootstrappers:kubeadm:default-node-token",
-			// The bootstrap token will expire 2 hours after creation.
-			"expiration":                     time.Now().Add(2 * time.Hour).Format(time.RFC3339),
+			// A static cluster may ask for a longer window, since its token has to survive
+			// BFB flashing. A kamaji cluster always gets the default.
+			"expiration":                     expiresAt.Format(time.RFC3339),
 			"usage-bootstrap-authentication": "true",
 			"usage-bootstrap-signing":        "true",
 			"description":                    "Bootstrap token for DPU cluster node join",
@@ -97,15 +127,15 @@ func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context
 	clusterConfig := dpucluster.NewConfig(s, dc)
 	dpuClusterClient, err := clusterConfig.Client(ctx)
 	if err != nil {
-		return "", err
+		return JoinCommand{}, err
 	}
 	err = dpuClusterClient.Create(ctx, bootstrapToken)
 	if err != nil {
-		return "", fmt.Errorf("failed to create bootstrap token secret: %v", err)
+		return JoinCommand{}, fmt.Errorf("failed to create bootstrap token secret: %v", err)
 	}
 	server, err := dpucluster.NewConfig(s, dc).Server(ctx)
 	if err != nil {
-		return "", err
+		return JoinCommand{}, err
 	}
 	// Strip the scheme (http:// or https://) from the host if present.
 	// This is necessary because the join command expects a host without a scheme.
@@ -121,11 +151,11 @@ func (s *KubeadmBootstrapTokenGenerator) GenerateJoinCommand(ctx context.Context
 	// Add the CA certificate hash to the join command.
 	caCertHashes, err := clusterConfig.CACertHashes(ctx)
 	if err != nil {
-		return "", err
+		return JoinCommand{}, err
 	}
 	for _, hash := range caCertHashes {
 		joinCommand += fmt.Sprintf(" --discovery-token-ca-cert-hash %s", hash)
 	}
 
-	return joinCommand, nil
+	return JoinCommand{Command: joinCommand, TokenID: id, ExpiresAt: expiresAt}, nil
 }

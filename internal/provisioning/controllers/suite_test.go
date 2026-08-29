@@ -354,6 +354,6 @@ func bfbServer(bfbToServe []byte) func() {
 
 type mockNodeJoinCommandGenerator struct{}
 
-func (m *mockNodeJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (string, error) {
-	return "soup", nil
+func (m *mockNodeJoinCommandGenerator) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (dutil.JoinCommand, error) {
+	return dutil.JoinCommand{Command: "soup", TokenID: "abcdef", ExpiresAt: time.Now().Add(dutil.DefaultJoinTokenTTL)}, nil
 }

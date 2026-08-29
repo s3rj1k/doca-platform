@@ -102,6 +102,28 @@ type DPUClusterSpec struct {
 	// ClusterEndpoint contains configurations of the cluster entry point
 	// +optional
 	ClusterEndpoint *ClusterEndpointSpec `json:"clusterEndpoint,omitempty"`
+
+	// JoinToken configures the bootstrap token minted for nodes joining this cluster.
+	// Only read for clusters of type static, since a kamaji cluster is managed by DPF.
+	// +optional
+	JoinToken *JoinTokenSpec `json:"joinToken,omitempty"`
+}
+
+// JoinTokenSpec configures the bootstrap token minted for nodes joining a DPUCluster.
+type JoinTokenSpec struct {
+	// TTL is how long a minted join token authenticates for. It has to cover minting
+	// through BFB flashing and the DPU agent's first join attempt.
+	// +kubebuilder:default="2h"
+	// +kubebuilder:validation:Type=string
+	// Six digits per component keeps the hour count inside the int64 the bounds are evaluated in,
+	// and repeating components keep a compound duration such as 1h30m valid.
+	// +kubebuilder:validation:Pattern=`^([0-9]{1,6}(h|m|s|ms|us|µs|ns))+$`
+	// +kubebuilder:validation:MaxLength=10
+	// +kubebuilder:validation:Format=duration
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('10m')",message="ttl has to be at least 10m so a token outlives BFB flashing"
+	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('24h')",message="ttl has to be at most 24h so a leaked token ages out"
+	// +optional
+	TTL *metav1.Duration `json:"ttl,omitempty"`
 }
 
 // DPUClusterStatus defines the observed state of DPUCluster

@@ -93,7 +93,7 @@ func PrepareBFB(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Con
 			Namespace: dpu.Namespace,
 		},
 		Data: map[string][]byte{
-			"join": []byte(joinCommand),
+			"join": []byte(joinCommand.Command),
 		},
 	}
 	if err := controllerutil.SetOwnerReference(dpu, kubeadmSecret, ctrlCtx.Client.Scheme()); err != nil {
