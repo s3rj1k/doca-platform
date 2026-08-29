@@ -24,10 +24,15 @@ import (
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/allocator"
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/state"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
+	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
+	"github.com/nvidia/doca-platform/pkg/dpucluster"
+	testutils "github.com/nvidia/doca-platform/test/utils"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,3 +99,121 @@ func (n *noOpAllocator) RemoveCluster(*provisioningv1.DPUCluster) {}
 func (n *noOpAllocator) GetDPUsCount(*provisioningv1.DPUCluster) int {
 	return 0
 }
+
+// The join token lives in the DPU cluster where nothing owns it, and the annotation on the join
+// Secret is the only record of which one it is. Deleting had no test for this at all.
+var _ = Describe("DPU: deleting revokes the join token", func() {
+	var (
+		dpu              *provisioningv1.DPU
+		dpuCluster       *provisioningv1.DPUCluster
+		dpuClusterClient client.Client
+		joinSecret       *corev1.Secret
+		tokenSecret      *corev1.Secret
+	)
+
+	const tokenID = "abc123"
+
+	// Deleting releases the DPU from both of these before it reaches the token.
+	revokeCtrlCtx := func() *dutil.ControllerContext {
+		return &dutil.ControllerContext{
+			Client:               k8sClient,
+			DPUInProvisioningMap: dutil.NewDPUInProvisioningMap(10),
+			ClusterAllocator:     &noOpAllocator{},
+		}
+	}
+
+	BeforeEach(func() {
+		dpuDevice := dpuDeviceObj("dpu-device-revoke-test")
+		createObject(dpuDevice)
+
+		dpuCluster = dpuClusterObj("dpu-cluster-revoke-test", "static")
+		kamajiSecret, err := testutils.GetFakeKamajiClusterSecretFromEnvtest(*dpuCluster, cfg)
+		Expect(err).ToNot(HaveOccurred())
+		createObject(kamajiSecret)
+		createObject(dpuCluster)
+		dpuClusterClient, err = dpucluster.NewConfig(k8sClient, dpuCluster).Client(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// What the generator would have minted and what PrepareBFB would have stamped.
+		tokenSecret = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      dutil.BootstrapTokenSecretName(tokenID),
+			Namespace: metav1.NamespaceSystem,
+		}}
+		Expect(dpuClusterClient.Create(ctx, tokenSecret)).To(Succeed())
+		// The DPU cluster here is the same envtest apiserver, so a token a spec does not
+		// revoke would otherwise collide with the next one.
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(dpuClusterClient.Delete(ctx, tokenSecret))).To(Succeed())
+		})
+
+		dpu = dpuObj("dpu-revoke-test")
+		dpu.Spec.DPUDeviceName = dpuDevice.Name
+		dpu.Spec.NodeEffect = provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}}
+		dpu.Spec.Cluster.Name = dpuCluster.Name
+		dpu.Spec.Cluster.Namespace = dpuCluster.Namespace
+		dpu.Status.Phase = provisioningv1.DPUDeleting
+		dpu.Status.DPUInstallInterface = ptr.To(string(provisioningv1.InstallViaGNOI))
+		createObject(dpu)
+
+		joinSecret = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      cutil.KubeadmJoinSecretName(dpu.Name),
+			Namespace: dpu.Namespace,
+			Annotations: map[string]string{
+				cutil.JoinTokenIDAnnotation: tokenID,
+			},
+		}}
+		createObject(joinSecret)
+	})
+
+	It("deletes the bootstrap token from the DPU cluster", func() {
+		_, err := state.Deleting(ctx, dpu, revokeCtrlCtx())
+		Expect(err).NotTo(HaveOccurred())
+
+		err = dpuClusterClient.Get(ctx, client.ObjectKeyFromObject(tokenSecret), &corev1.Secret{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the token the DPU was given should be revoked")
+	})
+
+	// The annotation goes with the join Secret, so revoking has to happen first or the only
+	// record of which token to revoke is destroyed.
+	It("revokes before the join Secret that names the token is deleted", func() {
+		_, err := state.Deleting(ctx, dpu, revokeCtrlCtx())
+		Expect(err).NotTo(HaveOccurred())
+
+		err = dpuClusterClient.Get(ctx, client.ObjectKeyFromObject(tokenSecret), &corev1.Secret{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(joinSecret), &corev1.Secret{}))
+		}).WithTimeout(10 * time.Second).Should(BeTrue())
+	})
+
+	// A token nobody revoked is a live credential, so a failure has to stop the deletion
+	// rather than let the Secret naming it go.
+	It("stops the deletion when the DPU cluster cannot be reached", func() {
+		// Its kubeconfig is immutable, so the Secret behind it goes instead.
+		kubeconfigSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      dpuCluster.Spec.Kubeconfig,
+			Namespace: dpuCluster.Namespace,
+		}}
+		Expect(k8sClient.Delete(ctx, kubeconfigSecret)).To(Succeed())
+
+		_, err := state.Deleting(ctx, dpu, revokeCtrlCtx())
+		Expect(err).To(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(joinSecret), &corev1.Secret{})).To(Succeed(),
+			"the Secret naming the token must survive so the next pass can retry")
+	})
+
+	// A token already gone is a revoked token, so a retry after a partial deletion has to
+	// finish rather than block on the Secret it cannot find.
+	It("finishes when the token is already gone", func() {
+		Expect(dpuClusterClient.Delete(ctx, tokenSecret)).To(Succeed())
+
+		_, err := state.Deleting(ctx, dpu, revokeCtrlCtx())
+		Expect(err).ToNot(HaveOccurred())
+
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(joinSecret), &corev1.Secret{})
+			return apierrors.IsNotFound(err)
+		}).WithTimeout(10 * time.Second).Should(BeTrue())
+	})
+})

@@ -76,6 +76,11 @@ const (
 	DPUDeviceBMCIPLabel = DPUProvisioningPrefix + "dpudevice-bmc-ip"
 	// DPUOOBBridgeConfiguredLabel is the label that indicates that the DPU OOB bridge is configured.
 	DPUOOBBridgeConfiguredLabel = "dpu-oob-bridge-configured"
+	// JoinTokenIDAnnotation records the bootstrap token a DPU was given, which names the
+	// token Secret in the DPU cluster and is what makes revoking it possible.
+	JoinTokenIDAnnotation = DPUProvisioningPrefix + "join-token-id"
+	// JoinTokenExpiresAtAnnotation records when that token stops authenticating, in RFC3339.
+	JoinTokenExpiresAtAnnotation = DPUProvisioningPrefix + "join-token-expires-at"
 	// NodeFeatureDiscoveryLabelPrefix is the prefix for all NodeFeatureDiscovery labels.
 	NodeFeatureDiscoveryLabelPrefix = "feature.node.kubernetes.io/"
 	// NodeSelectorLabel is a label for linking Node with DPU.
@@ -208,6 +213,33 @@ func GenerateNodeName(dpu *provisioningv1.DPU) string {
 
 func KubeadmJoinSecretName(dpuName string) string {
 	return fmt.Sprintf("%s-kubeadm-join", dpuName)
+}
+
+// JoinTokenAnnotations records which token a join Secret carries and when it lapses. Only a
+// static cluster is stamped, so a kamaji join Secret keeps exactly the shape it always had.
+func JoinTokenAnnotations(dc *provisioningv1.DPUCluster, tokenID string, expiresAt time.Time) map[string]string {
+	if dc == nil || dc.Spec.Type != string(provisioningv1.StaticCluster) || tokenID == "" {
+		return nil
+	}
+
+	return map[string]string{
+		JoinTokenIDAnnotation:        tokenID,
+		JoinTokenExpiresAtAnnotation: expiresAt.Format(time.RFC3339),
+	}
+}
+
+// JoinTokenExpiresAtFrom reads back the expiry stamped on a join Secret. It reports false for a
+// kamaji Secret and for one written before the expiry was recorded.
+func JoinTokenExpiresAtFrom(secret *corev1.Secret) (time.Time, bool) {
+	raw, ok := secret.Annotations[JoinTokenExpiresAtAnnotation]
+	if !ok {
+		return time.Time{}, false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return expiresAt, true
 }
 
 func IsNodeReady(node *corev1.Node) bool {

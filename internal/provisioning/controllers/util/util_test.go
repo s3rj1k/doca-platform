@@ -18,6 +18,7 @@ package util
 
 import (
 	"testing"
+	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 
@@ -528,4 +529,47 @@ func TestNodeLabelsForDPU(t *testing.T) {
 		g.Expect(GetRemovedLabels(before, after)).To(ConsistOf("zone"))
 		g.Expect(after).To(HaveKeyWithValue(DPUNodeLabel, "true"))
 	})
+}
+
+func TestJoinTokenAnnotations(t *testing.T) {
+	expiresAt := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name        string
+		cluster     *provisioningv1.DPUCluster
+		tokenID     string
+		wantPresent bool
+	}{
+		{
+			name:        "static is stamped",
+			cluster:     &provisioningv1.DPUCluster{Spec: provisioningv1.DPUClusterSpec{Type: string(provisioningv1.StaticCluster)}},
+			tokenID:     "abc123",
+			wantPresent: true,
+		},
+		{
+			name:    "kamaji is left exactly as it was",
+			cluster: &provisioningv1.DPUCluster{Spec: provisioningv1.DPUClusterSpec{Type: string(provisioningv1.KamajiCluster)}},
+			tokenID: "abc123",
+		},
+		{
+			name:    "no token id, nothing to record",
+			cluster: &provisioningv1.DPUCluster{Spec: provisioningv1.DPUClusterSpec{Type: string(provisioningv1.StaticCluster)}},
+		},
+		{
+			name:    "no cluster",
+			tokenID: "abc123",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			got := JoinTokenAnnotations(tc.cluster, tc.tokenID, expiresAt)
+
+			if !tc.wantPresent {
+				g.Expect(got).To(BeNil())
+				return
+			}
+			g.Expect(got).To(HaveKeyWithValue(JoinTokenIDAnnotation, tc.tokenID))
+			g.Expect(got).To(HaveKeyWithValue(JoinTokenExpiresAtAnnotation, "2026-08-25T12:00:00Z"))
+		})
+	}
 }

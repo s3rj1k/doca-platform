@@ -101,6 +101,9 @@ const (
 	DPUCondReady                  DPUConditionType = "Ready"
 	DPUCondError                  DPUConditionType = "Error"
 	DPUCondArmForceRestarted      DPUConditionType = "ArmForceRestarted"
+	// DPUCondJoinTokenValid reports whether the join token this DPU was given still
+	// authenticates. Only set for static clusters, which are the ones that record an expiry.
+	DPUCondJoinTokenValid DPUConditionType = "JoinTokenValid"
 )
 
 // DPUOperationalConditionType represents operational readiness condition types
@@ -351,6 +354,11 @@ type DPUStatus struct {
 	// AgentLastStartupTime is the time when the DPU agent was last started. This is copied from agentStatus.lastStartupTime.
 	// +optional
 	AgentLastStartupTime *metav1.Time `json:"agentLastStartupTime,omitempty"`
+
+	// JoinTokenExpiresAt is when the join token this DPU was given stops authenticating.
+	// Recorded for static clusters only, so reporting expiry needs no read of the Secret.
+	// +optional
+	JoinTokenExpiresAt *metav1.Time `json:"joinTokenExpiresAt,omitempty"`
 
 	// AgentStatus contains the information reported from inside the DPU
 	// +optional

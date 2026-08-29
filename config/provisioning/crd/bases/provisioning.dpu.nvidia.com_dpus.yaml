@@ -541,6 +541,12 @@ spec:
                     description: UEFI is the used UEFI firmware version
                     type: string
                 type: object
+              joinTokenExpiresAt:
+                description: |-
+                  JoinTokenExpiresAt is when the join token this DPU was given stops authenticating.
+                  Recorded for static clusters only, so reporting expiry needs no read of the Secret.
+                format: date-time
+                type: string
               observedGeneration:
                 description: ObservedGeneration records the Generation observed on
                   the object the last time it was patched.

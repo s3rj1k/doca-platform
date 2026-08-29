@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	"github.com/nvidia/doca-platform/internal/provisioning/bfbregistry"
@@ -35,6 +36,7 @@ import (
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/util/reboot"
+	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/kubelet"
 
 	"github.com/fluxcd/pkg/runtime/patch"
 	corev1 "k8s.io/api/core/v1"
@@ -220,6 +222,7 @@ func (r *DPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl
 	// The DPU agent reports unrecoverable failures through the Error condition. Acting on it here
 	// keeps phase transitions owned by this controller, independent of the phase the DPU is in.
 	setErrorPhaseFromCondition(dpu, &nextState)
+	setJoinTokenValidCondition(&nextState, time.Now())
 
 	if UpdateDPUStatus(dpu, nextState) {
 		logger.Info("DPU phase changed", "from", dpu.Status.PreviousPhase, "to", dpu.Status.Phase)
@@ -234,10 +237,52 @@ func (r *DPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl
 	return ctrl.Result{}, err
 }
 
+// setJoinTokenValidCondition reports whether the join token this DPU was given still
+// authenticates. It reads only status, so no Secret is fetched on the reconcile path.
+func setJoinTokenValidCondition(state *provisioningv1.DPUStatus, now time.Time) {
+	// Absent for a kamaji cluster, and before the token is minted.
+	if state.JoinTokenExpiresAt == nil {
+		return
+	}
+	// Once the token has been spent the condition is frozen at whatever it last reported.
+	if _, cond := cutil.GetDPUCondition(state, provisioningv1.DPUCondJoinTokenValid.String()); cond != nil && joinTokenSpent(state) {
+		return
+	}
+
+	if now.Before(state.JoinTokenExpiresAt.Time) {
+		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondJoinTokenValid.String(), nil, "Valid",
+			fmt.Sprintf("join token expires at %s", state.JoinTokenExpiresAt.Format(time.RFC3339))))
+
+		return
+	}
+
+	err := fmt.Errorf("join token expired at %s", state.JoinTokenExpiresAt.Format(time.RFC3339))
+	cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondJoinTokenValid.String(), err, "Expired", err.Error()))
+}
+
+// joinTokenSpent reports whether the token has done its job and nothing will read it again.
+// A DPU that reached Ready has joined however its flavor asked, which covers a flavor that
+// skips ConfigureKubelet and so never reports that condition.
+func joinTokenSpent(state *provisioningv1.DPUStatus) bool {
+	if state.Phase == provisioningv1.DPUReady {
+		return true
+	}
+	if state.AgentStatus == nil {
+		return false
+	}
+	for _, c := range state.AgentStatus.Conditions {
+		if c.Type == kubelet.ConditionType && c.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+
+	return false
+}
+
 // setErrorPhaseFromCondition moves the DPU to the Error phase while the Error condition is True.
 // The DPU agent reports unrecoverable failures by setting that condition, and never writes the
 // phase itself, so this is where such a report is turned into a phase transition.
-// A deleting DPU is left alone: the condition is never cleared, so forcing the Error phase here
+// A deleting DPU is left alone, since the condition is never cleared and forcing the Error phase
 // would take the DPU out of the Deleting phase and stall its deletion.
 func setErrorPhaseFromCondition(dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus) {
 	if !dpu.DeletionTimestamp.IsZero() {

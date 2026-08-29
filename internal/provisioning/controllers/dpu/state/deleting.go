@@ -114,6 +114,14 @@ func Deleting(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Contr
 		},
 	}
 
+	// Before the join Secret goes, since the annotation naming the token is on it. A failure
+	// has to stop the deletion, or the Secret is removed and the token can never be found.
+	if err := revokeJoinToken(ctx, ctrlCtx.Client, dpu); err != nil {
+		err = fmt.Errorf("failed to revoke join token: %w", err)
+		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondDeleting.String(), err, "RevokeJoinTokenError", err.Error()))
+		return *state, err
+	}
+
 	objects, err := cutil.GetObjects(ctx, ctrlCtx.Client, deleteObjects)
 	if err != nil {
 		err = fmt.Errorf("failed to get objects: %w", err)
@@ -182,6 +190,62 @@ func RemoveDpuDeviceFinalizer(ctx context.Context, dpu *provisioningv1.DPU, ctrl
 			return fmt.Errorf("failed to remove DpuDevice finalizer: %w", err)
 		}
 	}
+	return nil
+}
+
+// revokeJoinToken deletes the bootstrap token the join Secret names. It has to run before that
+// Secret is deleted, since the annotation is the only record of which token to revoke.
+func revokeJoinToken(ctx context.Context, client crclient.Client, dpu *provisioningv1.DPU) error {
+	// Nothing was ever minted for a DPU with no cluster.
+	if dpu.Spec.Cluster.Name == "" {
+		return nil
+	}
+
+	joinSecret := &corev1.Secret{}
+	key := types.NamespacedName{Namespace: dpu.Namespace, Name: cutil.KubeadmJoinSecretName(dpu.Name)}
+	if err := client.Get(ctx, key, joinSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("reading join Secret %s: %w", key, err)
+	}
+
+	tokenID := joinSecret.Annotations[cutil.JoinTokenIDAnnotation]
+	if tokenID == "" {
+		// A kamaji cluster, or a Secret written before the token was recorded.
+		return nil
+	}
+
+	dc := &provisioningv1.DPUCluster{}
+	nn := types.NamespacedName{Namespace: dpu.Spec.Cluster.Namespace, Name: dpu.Spec.Cluster.Name}
+	if err := client.Get(ctx, nn, dc); err != nil {
+		if apierrors.IsNotFound(err) {
+			// The cluster is gone, so its tokens went with it.
+			return nil
+		}
+		return fmt.Errorf("reading DPUCluster %s: %w", nn, err)
+	}
+
+	return revokeBootstrapToken(ctx, client, dc, tokenID)
+}
+
+// revokeBootstrapToken deletes the token Secret an id names from the DPU cluster, where nothing
+// owns it and no garbage collector reaches it. A token already gone is a revoked token.
+func revokeBootstrapToken(ctx context.Context, client crclient.Client, dc *provisioningv1.DPUCluster, tokenID string) error {
+	dpuClient, _, err := cutil.GetClientset(ctx, client, dc)
+	if err != nil {
+		return fmt.Errorf("reaching DPU cluster to revoke token %s: %w", tokenID, err)
+	}
+
+	name := dutil.BootstrapTokenSecretName(tokenID)
+	if err := dpuClient.CoreV1().Secrets(metav1.NamespaceSystem).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("revoking join token %s: %w", name, err)
+		}
+		return nil
+	}
+	log.FromContext(ctx).Info("revoked join token", "token", name)
+
 	return nil
 }
 
