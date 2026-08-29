@@ -99,12 +99,14 @@ func JoinTokenTypeFor(dc *provisioningv1.DPUCluster) provisioningv1.JoinTokenTyp
 // NodeJoinCommandGenerator, so the call site does not know a choice is being made.
 type JoinCommandGenerators struct {
 	kubeadm NodeJoinCommandGenerator
+	k0s     NodeJoinCommandGenerator
 }
 
 // NewJoinCommandGenerators returns the generators this build knows how to run.
 func NewJoinCommandGenerators(c client.Client) *JoinCommandGenerators {
 	return &JoinCommandGenerators{
 		kubeadm: &KubeadmBootstrapTokenGenerator{Client: c},
+		k0s:     &K0sJoinTokenGenerator{Client: c},
 	}
 }
 
@@ -118,6 +120,8 @@ func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *pro
 	switch tokenType {
 	case provisioningv1.JoinTokenKubeadm:
 		return g.kubeadm.GenerateJoinCommand(ctx, dc, dpu)
+	case provisioningv1.JoinTokenK0s:
+		return g.k0s.GenerateJoinCommand(ctx, dc, dpu)
 	default:
 		return JoinCommand{}, fmt.Errorf("no join command generator for token type %q", tokenType)
 	}

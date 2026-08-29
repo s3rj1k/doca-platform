@@ -112,7 +112,10 @@ spec:
                   config:
                     description: |-
                       Config is read by the join mechanism Type names, so its keys belong to that mechanism
-                      rather than to this API, and they reach its join script template.
+                      rather than to this API. A kubeadm cluster reads nothing from it. A k0s cluster reads
+                      version to download that release, url to take it from somewhere other than GitHub, and
+                      sha256 to verify that download, and criSocket, profile, kubeletRootDir, extraArgs and
+                      readyFile to configure the worker.
                       Nothing here is validated on admission, so a bad value is reported on the DPU instead.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
@@ -156,6 +159,7 @@ spec:
                       and kubeadm is assumed when it is not set.
                     enum:
                     - kubeadm
+                    - k0s
                     type: string
                 type: object
               kubeconfig:

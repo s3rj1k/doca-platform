@@ -111,12 +111,14 @@ type DPUClusterSpec struct {
 }
 
 // JoinTokenType selects how a node authenticates when it joins the cluster.
-// +kubebuilder:validation:Enum=kubeadm
+// +kubebuilder:validation:Enum=kubeadm;k0s
 type JoinTokenType string
 
 const (
 	// JoinTokenKubeadm mints a kubeadm bootstrap token and emits a kubeadm join command.
 	JoinTokenKubeadm JoinTokenType = "kubeadm"
+	// JoinTokenK0s mints a k0s worker token and emits the script that joins with it.
+	JoinTokenK0s JoinTokenType = "k0s"
 )
 
 // JoinTokenSpec configures the bootstrap token minted for nodes joining a DPUCluster.
@@ -142,7 +144,10 @@ type JoinTokenSpec struct {
 	TTL *metav1.Duration `json:"ttl,omitempty"`
 
 	// Config is read by the join mechanism Type names, so its keys belong to that mechanism
-	// rather than to this API, and they reach its join script template.
+	// rather than to this API. A kubeadm cluster reads nothing from it. A k0s cluster reads
+	// version to download that release, url to take it from somewhere other than GitHub, and
+	// sha256 to verify that download, and criSocket, profile, kubeletRootDir, extraArgs and
+	// readyFile to configure the worker.
 	// Nothing here is validated on admission, so a bad value is reported on the DPU instead.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
