@@ -160,13 +160,13 @@ func (n *NodeManager) initDPUDevices() ([]*provisioningv1.DPUDevice, error) {
 			}
 		}
 
-		pciAddress := strings.ReplaceAll(device.Address, ":", "-")
-		dpuDevice.Status.PCIAddress = &pciAddress
+		SetPCIAddress(dpuDevice, device.Address)
 		if err := n.Status().Update(timeoutCtx, dpuDevice); err != nil {
 			return nil, fmt.Errorf("failed to update DPU device %s: %w", dpuDevice.Name, err)
 		}
 		ret = append(ret, dpuDevice)
-		klog.Infof("Registered DPUDevice. name: %s, serial number: %s, PCI address: %s", dpuDevice.Name, dpuDevice.Spec.SerialNumber, pciAddress)
+		klog.Infof("Registered DPUDevice. name: %s, serial number: %s, PCI address: %s",
+			dpuDevice.Name, dpuDevice.Spec.SerialNumber, ptr.Deref(dpuDevice.Status.PCIAddress, ""))
 	}
 	return ret, nil
 }
@@ -396,6 +396,11 @@ func (n *NodeManager) updateDPUDeviceStatus() error {
 			}
 			return fmt.Errorf("failed to get DPU device %s: %w", dpuDeviceCRName(device), err)
 		}
+		// Re-asserted rather than written once, so a host whose DPUDevice was overwritten by
+		// something reading a different PCI numbering returns to its own. Reported only once the
+		// update below lands, since the steps in between can abandon this device for a later pass.
+		correctedPCIAddress := SetPCIAddress(dpuDevice, device.Address)
+
 		pn0Name, err := hostutil.NewPCIHelper(device.Address).PF(0).InterfaceName()
 		if err != nil {
 			klog.Warningf("failed to get PF0 name. DPU %s, PCI Address: %s, Serial Number: %s, %v", dpuDeviceCRName(device), device.Address, device.SerialNumber, err)
@@ -430,8 +435,24 @@ func (n *NodeManager) updateDPUDeviceStatus() error {
 		if err := n.Status().Update(timeoutCtx, dpuDevice); err != nil {
 			return fmt.Errorf("failed to update DPUDevice status. name:%s, err: %w", dpuDeviceCRName(device), err)
 		}
+		if correctedPCIAddress {
+			klog.Warningf("corrected the PCI address of DPUDevice %s to %s",
+				dpuDeviceCRName(device), ptr.Deref(dpuDevice.Status.PCIAddress, ""))
+		}
 	}
 	return nil
+}
+
+// SetPCIAddress records the address a DPUDevice was discovered at, reporting whether it had to
+// be changed. A change means something wrote an address read from a different machine.
+func SetPCIAddress(dpuDevice *provisioningv1.DPUDevice, address string) bool {
+	pciAddress := strings.ReplaceAll(address, ":", "-")
+	if ptr.Deref(dpuDevice.Status.PCIAddress, "") == pciAddress {
+		return false
+	}
+	dpuDevice.Status.PCIAddress = &pciAddress
+
+	return true
 }
 
 func (n *NodeManager) updateDPUNodeStatus() error {
