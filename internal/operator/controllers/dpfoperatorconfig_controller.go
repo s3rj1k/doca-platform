@@ -526,6 +526,11 @@ func (r *DPFOperatorConfigReconciler) validateKubernetesVersionSkew(ctx context.
 			if dpu.Status.Phase == provisioningv1.DPUError {
 				continue
 			}
+			// Skip DPUs whose flavor disables kubelet configuration, since such a node never
+			// joins and so never reports a version for the check to compare.
+			if r.dpuSkipsKubeletVersionReporting(ctx, &dpu) {
+				continue
+			}
 			if err := r.validateDPUKubeletVersion(ctx, clusterClient, &dpu, apiserverVersion); err != nil {
 				errs = append(errs, fmt.Errorf("cluster %s/%s: %v",
 					dpuCluster.Cluster.Namespace, dpuCluster.Cluster.Name, err))
@@ -557,6 +562,26 @@ func (r *DPFOperatorConfigReconciler) getDPUsForCluster(ctx context.Context, clu
 	}
 
 	return assignedDPUs, nil
+}
+
+// dpuSkipsKubeletVersionReporting reports whether the DPU's flavor disables kubelet configuration,
+// which leaves a node that never joins and so reports no version by design.
+func (r *DPFOperatorConfigReconciler) dpuSkipsKubeletVersionReporting(ctx context.Context, dpu *provisioningv1.DPU) bool {
+	if dpu.Spec.DPUFlavor == "" {
+		return false
+	}
+	flavor := &provisioningv1.DPUFlavor{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: dpu.Namespace, Name: dpu.Spec.DPUFlavor}, flavor); err != nil {
+		// Logged, because otherwise a blocked upgrade reports only that the node has no version.
+		ctrllog.FromContext(ctx).Error(err, "reading DPUFlavor to decide the version skew check, validating the DPU",
+			"dpu", dpu.Name, "flavor", dpu.Spec.DPUFlavor)
+		return false
+	}
+
+	// Only skipping the kubelet configuration leaves a node that never joins and so never reports
+	// a version. The version check toggle only silences the agent status field the skew check
+	// stopped reading, so a DPU carrying it still registers a node with a real version.
+	return flavor.Spec.DPUAgentConfig.SkipOperations.ConfigureKubelet
 }
 
 func (r *DPFOperatorConfigReconciler) validateDPUKubeletVersion(ctx context.Context, clusterClient client.Reader, dpu *provisioningv1.DPU, apiserverVersion *semver.Version) error {
