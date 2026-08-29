@@ -107,6 +107,29 @@ spec:
                   JoinToken configures the bootstrap token minted for nodes joining this cluster.
                   Only read for clusters of type static, since a kamaji cluster is managed by DPF.
                 properties:
+                  config:
+                    description: |-
+                      Config is read by the join mechanism Type names, so its keys belong to that mechanism
+                      rather than to this API, and they reach its join script template.
+                      Nothing here is validated on admission, so a bad value is reported on the DPU instead.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  scriptTemplateRef:
+                    description: |-
+                      ScriptTemplateRef replaces the join script the mechanism named by Type ships with. Read
+                      from the namespace of this DPUCluster, so it cannot reach a ConfigMap the author cannot.
+                    properties:
+                      key:
+                        description: Key is the ConfigMap key holding the template.
+                          JOIN_SCRIPT_TEMPLATE is read when unset.
+                        type: string
+                      name:
+                        description: Name is the ConfigMap holding the template.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   ttl:
                     default: 2h
                     description: |-

@@ -2620,6 +2620,8 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `type` _[JoinTokenType](#jointokentype)_ | Type selects how nodes join this cluster. Only read for clusters of type static,<br />and kubeadm is assumed when it is not set. | kubeadm | Enum: [kubeadm] <br />Optional: \{\} <br /> |
 | `ttl` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | TTL is how long a minted join token authenticates for. It has to cover minting<br />through BFB flashing and the DPU agent's first join attempt.<br />Six digits per component keeps the hour count inside the int64 the bounds are evaluated in,<br />and repeating components keep a compound duration such as 1h30m valid. | 2h | Format: duration <br />MaxLength: 10 <br />Pattern: `^([0-9]\{1,6\}(h\|m\|s\|ms\|us\|µs\|ns))+$` <br />Type: string <br />Optional: \{\} <br /> |
+| `config` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#rawextension-runtime-pkg)_ | Config is read by the join mechanism Type names, so its keys belong to that mechanism<br />rather than to this API, and they reach its join script template.<br />Nothing here is validated on admission, so a bad value is reported on the DPU instead. |  | Optional: \{\} <br /> |
+| `scriptTemplateRef` _[ScriptTemplateRef](#scripttemplateref)_ | ScriptTemplateRef replaces the join script the mechanism named by Type ships with. Read<br />from the namespace of this DPUCluster, so it cannot reach a ConfigMap the author cannot. |  | Optional: \{\} <br /> |
 
 
 #### JoinTokenType
@@ -2867,6 +2869,24 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `name` _string_ |  |  | MinLength: 1 <br />Required: \{\} <br /> |
+
+
+#### ScriptTemplateRef
+
+
+
+ScriptTemplateRef names a ConfigMap holding a join script template. The ConfigMap is read from
+the namespace of the DPUCluster that names it, so it cannot reach one the author cannot read.
+
+
+
+_Appears in:_
+- [JoinTokenSpec](#jointokenspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name is the ConfigMap holding the template. |  | MinLength: 1 <br />Required: \{\} <br /> |
+| `key` _string_ | Key is the ConfigMap key holding the template. JOIN_SCRIPT_TEMPLATE is read when unset. |  | Optional: \{\} <br /> |
 
 
 #### SecureBootStatus
