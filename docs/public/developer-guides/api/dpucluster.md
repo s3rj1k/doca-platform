@@ -31,6 +31,17 @@ spec:
   staticClusterManager: {}
 ```
 
+The dpf-operator chart also needs telling, since it is rendered before the DPFOperatorConfig
+exists and defaults to Kamaji:
+
+```shell
+helm upgrade --install -n dpf-operator-system dpf-operator dpf-repository/dpf-operator \
+  --set clusterManager=static
+```
+
+Without it the chart creates the Kamaji etcd defrag CronJob, which waits forever in
+`ContainerCreating` for certificates a static install never produces.
+
 Then create a secret for storing the kubeconfig of the existing Kubernetes control plane. For example, the kubeconfig is
 under the home directory:
 

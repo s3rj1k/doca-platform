@@ -58,8 +58,12 @@ grafanaDashboards:
 ## This is used to expose metrics securely for Prometheus scraping.
 prometheusSecureMetrics:
   enabled: true
-## kamajiEtcdDefrag enables the etcd-defrag job for Kamaji.
-## This job is used to defragment the etcd database used by Kamaji.
+## clusterManager names the cluster manager that will be enabled in DPFOperatorConfig.
+## Valid values are "kamaji" and "static", and empty is treated as "kamaji".
+# @ignore
+clusterManager: ""
+## kamajiEtcdDefrag defragments the etcd database used by Kamaji. It is created only when
+## clusterManager is "kamaji", since it mounts certificates from the kamaji-etcd release.
 kamajiEtcdDefrag:
   ## namespaceOverride allows to override the namespace where the etcd-defrag job will be deployed.
   namespaceOverride: ""

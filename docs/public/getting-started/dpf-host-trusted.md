@@ -72,6 +72,10 @@ The command above does the following:
 * Creates the `dpf-operator-system` namespace if it does not exist
 * Installs the DPF Operator version v26.4.1 from the NVIDIA repository
 
+> [!NOTE]
+> When you plan to enable the static cluster manager rather than Kamaji, add `--set clusterManager=static` so the
+> chart does not create the Kamaji etcd defrag job, which a static install has no certificates for.
+
 ### 3. Verify the Installation
 
 Check that the DPF Operator has been successfully deployed and is running:

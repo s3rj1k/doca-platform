@@ -31,3 +31,18 @@ Selector labels
 app.kubernetes.io/name: {{ include "dpf-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Validate and return the cluster manager. Only absent or empty falls back, so a value computed
+to false reaches the check rather than being read as unset.
+*/}}
+{{- define "dpf-operator.clusterManager" -}}
+{{- $clusterManager := .Values.clusterManager -}}
+{{- if or (kindIs "invalid" $clusterManager) (eq (toString $clusterManager) "") -}}
+{{- $clusterManager = "kamaji" -}}
+{{- end -}}
+{{- if not (has $clusterManager (list "kamaji" "static")) -}}
+{{- fail (printf "clusterManager must be either \"kamaji\" or \"static\", got %v" .Values.clusterManager) -}}
+{{- end -}}
+{{- $clusterManager -}}
+{{- end }}
