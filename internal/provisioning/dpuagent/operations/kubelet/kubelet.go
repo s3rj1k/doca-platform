@@ -42,6 +42,7 @@ const (
 	builtinKubeletConfig = "/usr/lib/systemd/system/kubelet.service.d/90-kubelet-bluefield.conf"
 	conditionType        = "KubeletConfigured"
 	kubeadminSecretKey   = "join"
+	kubeletVersionCmd    = "kubelet --version"
 
 	defaultKubleteCA           = "/etc/kubernetes/pki/ca.crt"
 	defaultKubeletBootstrap    = "/etc/kubernetes/bootstrap-kubelet.conf"
@@ -202,11 +203,11 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 	if c.kubeletConfPath == "" {
 		c.kubeletConfPath = defaultKubeletConf
 	}
-	c.cleanupKubeletFiles()
-	if err := c.stopKubeletService(); err != nil {
+	c.cleanupKubeletFiles(optCtx)
+	if err := c.stopKubeletService(optCtx); err != nil {
 		return err
 	}
-	if err := c.writeKubeletSystemdDropIn(); err != nil {
+	if err := c.writeKubeletSystemdDropIn(optCtx); err != nil {
 		return err
 	}
 
@@ -227,7 +228,7 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 	if err != nil {
 		return fmt.Errorf("failed to run join command: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 	}
-	if err := c.applyKubeletCustomizedConfig(); err != nil {
+	if err := c.applyKubeletCustomizedConfig(optCtx); err != nil {
 		return err
 	}
 	if err := c.recordKubeletVersion(optCtx); err != nil {
@@ -237,14 +238,20 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 }
 
 // cleanupKubeletFiles removes the credentials an earlier join left behind.
-func (c *ConfigureKubelet) cleanupKubeletFiles() {
+func (c *ConfigureKubelet) cleanupKubeletFiles(optCtx *operations.Context) {
+	if optCtx.Options.SkipKubeletConfigCleanup {
+		return
+	}
 	_ = os.Remove(c.caPath)
 	_ = os.Remove(c.bootstrapPath)
 	_ = os.Remove(c.kubeletConfPath)
 }
 
 // stopKubeletService stops kubelet so the join does not race a running one.
-func (c *ConfigureKubelet) stopKubeletService() error {
+func (c *ConfigureKubelet) stopKubeletService(optCtx *operations.Context) error {
+	if optCtx.Options.SkipKubeletStop {
+		return nil
+	}
 	if c.stopKubelet == nil {
 		c.stopKubelet = stopKubelet
 	}
@@ -255,7 +262,10 @@ func (c *ConfigureKubelet) stopKubeletService() error {
 }
 
 // writeKubeletSystemdDropIn installs the drop-in that points kubelet at the joined credentials.
-func (c *ConfigureKubelet) writeKubeletSystemdDropIn() error {
+func (c *ConfigureKubelet) writeKubeletSystemdDropIn(optCtx *operations.Context) error {
+	if optCtx.Options.SkipKubeletSystemdDropIn {
+		return nil
+	}
 	if err := c.createKubeletSystemdDropIn(); err != nil {
 		return fmt.Errorf("failed to create kubelet systemd drop-in: %w", err)
 	}
@@ -263,7 +273,10 @@ func (c *ConfigureKubelet) writeKubeletSystemdDropIn() error {
 }
 
 // applyKubeletCustomizedConfig merges the DPU specific settings into the kubelet config.
-func (c *ConfigureKubelet) applyKubeletCustomizedConfig() error {
+func (c *ConfigureKubelet) applyKubeletCustomizedConfig(optCtx *operations.Context) error {
+	if optCtx.Options.SkipKubeletCustomizedConfig {
+		return nil
+	}
 	if err := c.addKubeletCustomizedConfig(); err != nil {
 		return fmt.Errorf("failed to add kubelet customized config: %w", err)
 	}
@@ -272,6 +285,9 @@ func (c *ConfigureKubelet) applyKubeletCustomizedConfig() error {
 
 // recordKubeletVersion reports the running kubelet version on the agent status.
 func (c *ConfigureKubelet) recordKubeletVersion(optCtx *operations.Context) error {
+	if optCtx.Options.SkipKubeletVersionCheck {
+		return nil
+	}
 	kubeletVersion, err := c.KubeletVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get kubelet version: %w", err)
@@ -284,7 +300,7 @@ func (c *ConfigureKubelet) KubeletVersion() (*string, error) {
 	if c.runBash == nil {
 		c.runBash = bash.Run
 	}
-	stdout, stderr, err := c.runBash("kubelet --version")
+	stdout, stderr, err := c.runBash(kubeletVersionCmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run kubelet version: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 	}

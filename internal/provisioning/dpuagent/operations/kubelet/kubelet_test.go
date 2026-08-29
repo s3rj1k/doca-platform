@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
@@ -328,7 +329,7 @@ var _ = Describe("Kubelet", func() {
 					return nil
 				},
 				runBash: func(cmd string) (bytes.Buffer, bytes.Buffer, error) {
-					if cmd == "kubelet --version" {
+					if cmd == kubeletVersionCmd {
 						var stdout bytes.Buffer
 						stdout.WriteString("Kubernetes v1.33.3")
 						return stdout, bytes.Buffer{}, nil
@@ -436,7 +437,7 @@ var _ = Describe("Kubelet", func() {
 					return nil
 				},
 				runBash: func(cmd string) (bytes.Buffer, bytes.Buffer, error) {
-					if cmd == "kubelet --version" {
+					if cmd == kubeletVersionCmd {
 						var stdout bytes.Buffer
 						stdout.WriteString("Kubernetes v1.33.3")
 						return stdout, bytes.Buffer{}, nil
@@ -475,5 +476,229 @@ var _ = Describe("Kubelet", func() {
 			Expect(os.IsNotExist(err)).To(BeTrue())
 		})
 
+		It("should run the join but skip every kubelet service step when granular skips are set", func() {
+			caPath := filepath.Join(tempDir, "granular-ca.crt")
+			systemdDropInDir := filepath.Join(tempDir, "granular-systemd")
+			Expect(os.WriteFile(caPath, []byte("keep-me"), 0644)).To(Succeed())
+
+			stopKubeletCalled := false
+			joinCmdExecuted := ""
+			operation := &ConfigureKubelet{
+				caPath:           caPath,
+				bootstrapPath:    filepath.Join(tempDir, "granular-bootstrap.conf"),
+				kubeletConfPath:  filepath.Join(tempDir, "granular-kubelet.conf"),
+				systemdDropInDir: systemdDropInDir,
+				stopKubelet: func() error {
+					stopKubeletCalled = true
+					return nil
+				},
+				runBash: func(cmd string) (bytes.Buffer, bytes.Buffer, error) {
+					if cmd == kubeletVersionCmd {
+						return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("kubelet binary should not be queried")
+					}
+					joinCmdExecuted = cmd
+					return bytes.Buffer{}, bytes.Buffer{}, nil
+				},
+			}
+			mockCli := &mockClient{
+				getObjectFunc: func(ctx context.Context, namespace, name string, obj client.Object) error {
+					secret := obj.(*corev1.Secret)
+					secret.Data = map[string][]byte{
+						"join": []byte("/opt/dpf/k0s-join.sh"),
+					}
+					return nil
+				},
+			}
+			err := operation.Execute(ctx, &operations.Context{
+				LatestDPU: &provisioningv1.DPU{},
+				Client:    mockCli,
+				Options: opts.Options{
+					KubeadmSecretNamespace:      "default",
+					KubeadmSecretName:           "kubeadm-join",
+					SkipKubeletConfigCleanup:    true,
+					SkipKubeletStop:             true,
+					SkipKubeletSystemdDropIn:    true,
+					SkipKubeletCustomizedConfig: true,
+					SkipKubeletVersionCheck:     true,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the join payload still ran")
+			Expect(joinCmdExecuted).To(Equal("/opt/dpf/k0s-join.sh"))
+
+			By("verifying no kubelet service step was touched")
+			Expect(stopKubeletCalled).To(BeFalse())
+			_, err = os.Stat(caPath)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = os.Stat(systemdDropInDir)
+			Expect(os.IsNotExist(err)).To(BeTrue())
+		})
+
+		// One skip at a time, because setting all five together cannot tell a guard reading
+		// the wrong Options field from one reading the right one.
+		DescribeTable("should skip only the step its own option names",
+			func(setSkip func(*opts.Options), expect func(effects)) {
+				caPath := filepath.Join(tempDir, "single-ca.crt")
+				bootstrapPath := filepath.Join(tempDir, "single-bootstrap.conf")
+				systemdDropInDir := filepath.Join(tempDir, "single-systemd")
+				kubeletDataConfig := filepath.Join(tempDir, "single-config.yaml")
+				Expect(os.WriteFile(caPath, []byte("keep-me"), 0644)).To(Succeed())
+				Expect(os.WriteFile(bootstrapPath, []byte("keep-me"), 0644)).To(Succeed())
+				Expect(os.WriteFile(kubeletDataConfig, []byte(minimalKubeletConfigYAML), 0644)).To(Succeed())
+
+				got := effects{}
+				operation := &ConfigureKubelet{
+					caPath:            caPath,
+					bootstrapPath:     bootstrapPath,
+					kubeletConfPath:   filepath.Join(tempDir, "single-kubelet.conf"),
+					kubeletDataConfig: kubeletDataConfig,
+					systemdDropInDir:  systemdDropInDir,
+					stopKubelet: func() error {
+						got.stopCalled = true
+						return nil
+					},
+					runBash: func(cmd string) (bytes.Buffer, bytes.Buffer, error) {
+						if cmd == kubeletVersionCmd {
+							got.versionQueried = true
+							var stdout bytes.Buffer
+							stdout.WriteString("Kubernetes v1.33.3")
+							return stdout, bytes.Buffer{}, nil
+						}
+						got.joinCmd = cmd
+						return bytes.Buffer{}, bytes.Buffer{}, nil
+					},
+				}
+				mockCli := &mockClient{
+					getObjectFunc: func(ctx context.Context, namespace, name string, obj client.Object) error {
+						obj.(*corev1.Secret).Data = map[string][]byte{"join": []byte("/opt/dpf/k0s-join.sh")}
+						return nil
+					},
+				}
+
+				options := opts.Options{
+					KubeadmSecretNamespace: "default",
+					KubeadmSecretName:      "kubeadm-join",
+				}
+				setSkip(&options)
+
+				opCtx := &operations.Context{
+					LatestDPU: &provisioningv1.DPU{},
+					Client:    mockCli,
+					Options:   options,
+				}
+				Expect(operation.Execute(ctx, opCtx)).To(Succeed())
+
+				got.caSurvived = fileExists(caPath)
+				got.bootstrapSurvived = fileExists(bootstrapPath)
+				got.dropInWritten = fileExists(systemdDropInDir)
+				got.reportedVersion = opCtx.Status.KubeletVersion
+
+				// Hardening is only written back when the customized config step runs.
+				hardened, err := os.ReadFile(kubeletDataConfig)
+				Expect(err).NotTo(HaveOccurred())
+				got.configHardened = strings.Contains(string(hardened), "protectKernelDefaults: true")
+
+				By("verifying the join payload always runs")
+				Expect(got.joinCmd).To(Equal("/opt/dpf/k0s-join.sh"))
+				expect(got)
+			},
+			Entry("config cleanup", func(o *opts.Options) { o.SkipKubeletConfigCleanup = true }, func(got effects) {
+				Expect(got.caSurvived).To(BeTrue(), "ca should be left in place")
+				Expect(got.bootstrapSurvived).To(BeTrue(), "bootstrap kubeconfig should be left in place")
+				Expect(got.stopCalled).To(BeTrue(), "kubelet should still be stopped")
+				Expect(got.dropInWritten).To(BeTrue(), "drop-in should still be written")
+				Expect(got.versionQueried).To(BeTrue(), "version should still be checked")
+				Expect(got.configHardened).To(BeTrue(), "kubelet config should still be hardened")
+			}),
+			Entry("stop", func(o *opts.Options) { o.SkipKubeletStop = true }, func(got effects) {
+				Expect(got.stopCalled).To(BeFalse(), "kubelet should not be stopped")
+				Expect(got.caSurvived).To(BeFalse(), "ca should still be removed")
+				Expect(got.dropInWritten).To(BeTrue(), "drop-in should still be written")
+				Expect(got.versionQueried).To(BeTrue(), "version should still be checked")
+				Expect(got.configHardened).To(BeTrue(), "kubelet config should still be hardened")
+			}),
+			Entry("systemd drop-in", func(o *opts.Options) { o.SkipKubeletSystemdDropIn = true }, func(got effects) {
+				Expect(got.dropInWritten).To(BeFalse(), "drop-in should not be written")
+				Expect(got.caSurvived).To(BeFalse(), "ca should still be removed")
+				Expect(got.stopCalled).To(BeTrue(), "kubelet should still be stopped")
+				Expect(got.versionQueried).To(BeTrue(), "version should still be checked")
+				Expect(got.configHardened).To(BeTrue(), "kubelet config should still be hardened")
+			}),
+			Entry("customized config", func(o *opts.Options) { o.SkipKubeletCustomizedConfig = true }, func(got effects) {
+				Expect(got.caSurvived).To(BeFalse(), "ca should still be removed")
+				Expect(got.stopCalled).To(BeTrue(), "kubelet should still be stopped")
+				Expect(got.dropInWritten).To(BeTrue(), "drop-in should still be written")
+				Expect(got.versionQueried).To(BeTrue(), "version should still be checked")
+				Expect(got.configHardened).To(BeFalse(), "kubelet config should not be hardened")
+			}),
+			Entry("version check", func(o *opts.Options) { o.SkipKubeletVersionCheck = true }, func(got effects) {
+				Expect(got.versionQueried).To(BeFalse(), "kubelet binary should not be queried")
+				Expect(got.reportedVersion).To(BeNil(), "no version should be reported")
+				Expect(got.caSurvived).To(BeFalse(), "ca should still be removed")
+				Expect(got.stopCalled).To(BeTrue(), "kubelet should still be stopped")
+				Expect(got.dropInWritten).To(BeTrue(), "drop-in should still be written")
+				Expect(got.configHardened).To(BeTrue(), "kubelet config should still be hardened")
+			}),
+		)
+
+		It("should report the kubelet version when the check is not skipped", func() {
+			kubeletDataConfig := filepath.Join(tempDir, "reported-config.yaml")
+			Expect(os.WriteFile(kubeletDataConfig, []byte(minimalKubeletConfigYAML), 0644)).To(Succeed())
+
+			operation := &ConfigureKubelet{
+				caPath:            filepath.Join(tempDir, "reported-ca.crt"),
+				bootstrapPath:     filepath.Join(tempDir, "reported-bootstrap.conf"),
+				kubeletConfPath:   filepath.Join(tempDir, "reported-kubelet.conf"),
+				kubeletDataConfig: kubeletDataConfig,
+				systemdDropInDir:  filepath.Join(tempDir, "reported-systemd"),
+				stopKubelet:       func() error { return nil },
+				runBash: func(cmd string) (bytes.Buffer, bytes.Buffer, error) {
+					if cmd == kubeletVersionCmd {
+						var stdout bytes.Buffer
+						stdout.WriteString("Kubernetes v1.33.3")
+						return stdout, bytes.Buffer{}, nil
+					}
+					return bytes.Buffer{}, bytes.Buffer{}, nil
+				},
+			}
+			mockCli := &mockClient{
+				getObjectFunc: func(ctx context.Context, namespace, name string, obj client.Object) error {
+					obj.(*corev1.Secret).Data = map[string][]byte{"join": []byte("join")}
+					return nil
+				},
+			}
+
+			opCtx := &operations.Context{
+				LatestDPU: &provisioningv1.DPU{},
+				Client:    mockCli,
+				Options: opts.Options{
+					KubeadmSecretNamespace: "default",
+					KubeadmSecretName:      "kubeadm-join",
+				},
+			}
+			Expect(operation.Execute(ctx, opCtx)).To(Succeed())
+			Expect(opCtx.Status.KubeletVersion).NotTo(BeNil())
+			Expect(*opCtx.Status.KubeletVersion).To(Equal("v1.33.3"))
+		})
+
 	})
 })
+
+// effects records what ConfigureKubelet did, so each skip can assert on the steps it did
+// not name as well as the one it did.
+type effects struct {
+	joinCmd           string
+	stopCalled        bool
+	versionQueried    bool
+	caSurvived        bool
+	bootstrapSurvived bool
+	dropInWritten     bool
+	configHardened    bool
+	reportedVersion   *string
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}

@@ -18,6 +18,8 @@ package opts
 
 import (
 	"fmt"
+
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 )
 
 const (
@@ -50,6 +52,43 @@ type Options struct {
 	SkipConfigureKubelet       bool
 	SkipStartKubelet           bool
 	SkipRebootMethodDiscovery  bool
+
+	// Granular ConfigureKubelet sub-step toggles. These let a node run the join
+	// payload while skipping individual kubelet service side effects.
+	SkipKubeletConfigCleanup    bool
+	SkipKubeletStop             bool
+	SkipKubeletSystemdDropIn    bool
+	SkipKubeletCustomizedConfig bool
+	SkipKubeletVersionCheck     bool
+}
+
+// ApplyFlavorSkips folds the DPUFlavor skip toggles into the options. The flavor already
+// reaches the DPU as YAML, so this is the one place the two spellings have to agree.
+func (o *Options) ApplyFlavorSkips(skip provisioningv1.DPUAgentSkipOperations) {
+	for _, m := range []struct {
+		option *bool
+		flavor bool
+	}{
+		{&o.SkipSysctl, skip.Sysctl},
+		{&o.SkipNetworkConfig, skip.NetworkConfig},
+		{&o.SkipDNSConfig, skip.DNSConfig},
+		{&o.SkipContainerdConfigration, skip.ContainerdConfig},
+		{&o.SkipSFConfig, skip.SFConfig},
+		{&o.SkipVFMac, skip.VFMac},
+		{&o.SkipOVSRawScript, skip.OVSRawScript},
+		{&o.SkipKernelCmdLine, skip.KernelCmdLine},
+		{&o.SkipRemoveBuiltinKubelet, skip.RemoveBuiltinKubelet},
+		{&o.SkipConfigureKubelet, skip.ConfigureKubelet},
+		{&o.SkipStartKubelet, skip.StartKubelet},
+		{&o.SkipRebootMethodDiscovery, skip.RebootMethodDiscovery},
+		{&o.SkipKubeletConfigCleanup, skip.KubeletConfigCleanup},
+		{&o.SkipKubeletStop, skip.KubeletStop},
+		{&o.SkipKubeletSystemdDropIn, skip.KubeletSystemdDropIn},
+		{&o.SkipKubeletCustomizedConfig, skip.KubeletCustomizedConfig},
+		{&o.SkipKubeletVersionCheck, skip.KubeletVersionCheck},
+	} {
+		*m.option = *m.option || m.flavor
+	}
 }
 
 func (o Options) Validate() error {
@@ -75,6 +114,25 @@ func (o Options) Validate() error {
 	}
 	if !o.SkipConfigureKubelet && o.KubeadmSecretName == "" {
 		return fmt.Errorf("kubeadm secret name is required")
+	}
+	// The kubelet sub-step skips only take effect while ConfigureKubelet runs.
+	// Setting them together with skip-configure-kubelet is contradictory.
+	if o.SkipConfigureKubelet {
+		subSteps := []struct {
+			name string
+			set  bool
+		}{
+			{"skip-kubelet-config-cleanup", o.SkipKubeletConfigCleanup},
+			{"skip-kubelet-stop", o.SkipKubeletStop},
+			{"skip-kubelet-systemd-drop-in", o.SkipKubeletSystemdDropIn},
+			{"skip-kubelet-customized-config", o.SkipKubeletCustomizedConfig},
+			{"skip-kubelet-version-check", o.SkipKubeletVersionCheck},
+		}
+		for _, s := range subSteps {
+			if s.set {
+				return fmt.Errorf("--%s has no effect when --skip-configure-kubelet is set", s.name)
+			}
+		}
 	}
 	return nil
 }
