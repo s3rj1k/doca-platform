@@ -66,6 +66,15 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
+	// A DPU carries the same PCI IDs as the card in its host, so it can be labeled as if it
+	// were a host. Remove the HostAgent Pod and the DPUNode that Pod registered for itself.
+	if r.isDPUNode(node) {
+		return ctrl.Result{}, kerrors.NewAggregate([]error{
+			r.deleteHostAgentPod(ctx, node),
+			r.handleReconcileDelete(ctx, node.Name),
+		})
+	}
+
 	if !r.isDPUEnabled(node) {
 		return ctrl.Result{}, nil
 	}
@@ -96,18 +105,29 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 // getDPUNodeObjectKey returns an ObjectKey for the DPUNode associated with a Node
-func getDPUNodeKey(node string) client.ObjectKey {
+func getDPUNodeKey(namespace, node string) client.ObjectKey {
 	// TODO: change to check based on DPUNode List and DPUNode.KubeNodeRef
 	return types.NamespacedName{
-		Namespace: operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace,
+		Namespace: namespace,
 		Name:      node,
 	}
+}
+
+// operatorNamespace reports where DPF objects live, which is not the default namespace on every
+// install. The default stands in when the config cannot be read, so cleanup still runs.
+func (r *NodeReconciler) operatorNamespace(ctx context.Context) string {
+	dpfOperatorConfig, err := dpfutils.GetDPFOperatorConfig(ctx, r.Client)
+	if err != nil {
+		return operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace
+	}
+
+	return dpfOperatorConfig.Namespace
 }
 
 // reconcileDelete ensures proper cleanup of resources when a node has been deleted or cannot be found
 func (r *NodeReconciler) handleReconcileDelete(ctx context.Context, nodeName string) error {
 	dpuNode := &provisioningv1.DPUNode{}
-	err := r.Client.Get(ctx, getDPUNodeKey(nodeName), dpuNode)
+	err := r.Client.Get(ctx, getDPUNodeKey(r.operatorNamespace(ctx), nodeName), dpuNode)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to get DPUNode: %w", err)
 	}
@@ -158,6 +178,38 @@ func (r *NodeReconciler) isDPUEnabled(node *corev1.Node) bool {
 		return true
 	}
 	return false
+}
+
+// isDPUNode reports whether the Node is a DPU rather than a host holding one. The value is
+// checked so that setting it to anything else opts the Node back out.
+func (r *NodeReconciler) isDPUNode(node *corev1.Node) bool {
+	return node.ObjectMeta.Labels[cutil.DPUNodeLabel] == cutil.DPUNodeLabelValue
+}
+
+// deleteHostAgentPod removes a HostAgent Pod from a Node that should never have received one.
+// The Pod cannot reach a DPU from a DPU, so it would otherwise crash loop forever.
+func (r *NodeReconciler) deleteHostAgentPod(ctx context.Context, node *corev1.Node) error {
+	log := ctrllog.FromContext(ctx)
+
+	dpfOperatorConfig, err := dpfutils.GetDPFOperatorConfig(ctx, r.Client)
+	if err != nil {
+		return fmt.Errorf("get DPFOperatorConfig: %w", err)
+	}
+
+	nn := types.NamespacedName{
+		Namespace: dpfOperatorConfig.Namespace,
+		Name:      cutil.GenerateHostAgentPodName(node),
+	}
+	pod := &corev1.Pod{}
+	if err := r.Client.Get(ctx, nn, pod); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !pod.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
+	log.Info("Deleting HostAgent Pod from a Node that is a DPU", "pod", nn.Name, "node", node.Name)
+	return client.IgnoreNotFound(r.Client.Delete(ctx, pod))
 }
 
 // deleteDMSPods deletes all DMS pods at controller startup for upgrade from 25.7 to 25.10
