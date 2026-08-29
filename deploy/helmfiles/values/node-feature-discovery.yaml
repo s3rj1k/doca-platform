@@ -23,6 +23,15 @@ master:
 worker:
   enable: true
   hostNetwork: true
+  # A DPU's own ConnectX reports the same PCI ID as a BlueField, so a worker running on a DPU
+  # would label that DPU as DPU capable and DPF would treat it as a host holding one.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: "provisioning.dpu.nvidia.com/dpu-node"
+                operator: DoesNotExist
   tolerations:
     - key: node.kubernetes.io/not-ready
       operator: Exists

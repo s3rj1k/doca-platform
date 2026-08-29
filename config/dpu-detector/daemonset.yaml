@@ -21,6 +21,10 @@ spec:
                 operator: DoesNotExist
               - key: node-role.kubernetes.io/master
                 operator: DoesNotExist
+              # A DPU would report its own PCI numbering here, which describes the DPU rather
+              # than the host that owns it and is meaningless to every reader of those labels.
+              - key: provisioning.dpu.nvidia.com/dpu-node
+                operator: DoesNotExist
       automountServiceAccountToken: false
       securityContext:
         ## Note: This is required as the NFD features file is in /etc/kubernetes
