@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"reflect"
@@ -79,6 +80,11 @@ const (
 	NodeFeatureDiscoveryLabelPrefix = "feature.node.kubernetes.io/"
 	// NodeSelectorLabel is a label for linking Node with DPU.
 	NodeSelectorLabel = NodeFeatureDiscoveryLabelPrefix + "dpu-enabled"
+	// DPUNodeLabel marks a Node that is itself a DPU, so components meant for hosts can be
+	// kept off it. DPF sets this one, unlike the labels a DPUSet asks for.
+	DPUNodeLabel = DPUProvisioningPrefix + "dpu-node"
+	// DPUNodeLabelValue is the only value DPF writes for DPUNodeLabel.
+	DPUNodeLabelValue = "true"
 	// DPUSetDPUTemplateSpecHashLabelKey is the label for the hash of the DPU template spec from the DPUSet.
 	DPUSetDPUTemplateSpecHashLabelKey = DPUProvisioningPrefix + "dpuset-dpu-template-spec-hash"
 	// LastAppliedLabelsOnDPUKey is the key for the last applied labels.
@@ -229,6 +235,16 @@ func AddLabelsToObject(ctx context.Context, client crclient.Client, obj metav1.O
 	}
 
 	return nil
+}
+
+// NodeLabelsForDPU merges what a DPUSet asked for with the label DPF sets itself. The result
+// is a new map, so the DPU spec it was built from is never mutated.
+func NodeLabelsForDPU(specLabels map[string]string) map[string]string {
+	labels := make(map[string]string, len(specLabels)+1)
+	maps.Copy(labels, specLabels)
+	labels[DPUNodeLabel] = DPUNodeLabelValue
+
+	return labels
 }
 
 // UpdateLabelsToNode updates the labels of the given node.
@@ -742,6 +758,28 @@ func NeedUpdateLabelsOnNodeInDPUCluster(dpuNode *corev1.Node, labelsOnDPUObject 
 		return true, nil
 	}
 	return false, nil
+}
+
+// NeedUpdateUserLabelsOnNodeInDPUCluster reports whether the labels a DPUSet asked for differ from
+// what was last applied, ignoring the label DPF adds itself.
+func NeedUpdateUserLabelsOnNodeInDPUCluster(dpuNode *corev1.Node, specLabels map[string]string) (bool, error) {
+	lastAppliedLabels := make(map[string]string)
+	if dpuNode.Annotations != nil {
+		if lastAppliedLabelsStr, ok := dpuNode.Annotations[LastAppliedLabelsOnDPUKey]; ok {
+			if err := json.Unmarshal([]byte(lastAppliedLabelsStr), &lastAppliedLabels); err != nil {
+				return false, err
+			}
+		}
+	}
+	delete(lastAppliedLabels, DPUNodeLabel)
+
+	// Dropped from both sides, so a spec that names the marker itself does not read as a change
+	// the user asked for on every pass.
+	wanted := make(map[string]string, len(specLabels))
+	maps.Copy(wanted, specLabels)
+	delete(wanted, DPUNodeLabel)
+
+	return !reflect.DeepEqual(wanted, lastAppliedLabels), nil
 }
 
 // GetBFBRegistryAddressWithPort returns the full bfb-registry address with port

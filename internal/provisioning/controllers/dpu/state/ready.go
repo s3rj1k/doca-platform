@@ -60,12 +60,19 @@ func Ready(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Controll
 		cond := cutil.DPUCondition(provisioningv1.DPUCondReady, "DPUReady", "")
 		cutil.SetDPUCondition(state, cond)
 
-		// Check if the labels on the node need to be updated
-		if needUpdateLabels, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(node, dpu.Spec.Cluster.NodeLabels); err != nil {
+		// Check if the labels on the node need to be updated. The comparison has to include the
+		// label DPF adds itself, since that is what was recorded as last applied.
+		if needUpdateLabels, err := cutil.NeedUpdateLabelsOnNodeInDPUCluster(node, cutil.NodeLabelsForDPU(dpu.Spec.Cluster.NodeLabels)); err != nil {
 			return *state, err
 		} else if needUpdateLabels {
+			// A node that is only missing the label DPF adds itself has nothing the user asked to
+			// change, so it takes the cheap path rather than draining on upgrade.
+			userLabelsChanged, err := cutil.NeedUpdateUserLabelsOnNodeInDPUCluster(node, dpu.Spec.Cluster.NodeLabels)
+			if err != nil {
+				return *state, err
+			}
 			// Check if applyOnLabelChange is enabled
-			if dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange != nil && *dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange {
+			if userLabelsChanged && dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange != nil && *dpu.Spec.NodeEffect.UpgradePolicy.ApplyOnLabelChange {
 				// Set status field to trigger node effect
 				state.PostProvisioningNodeEffect = ptr.To(true)
 				// Transition to nodeEffect state instead of DPUClusterConfig

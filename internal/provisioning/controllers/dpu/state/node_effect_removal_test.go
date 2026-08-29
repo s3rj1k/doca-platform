@@ -98,6 +98,13 @@ var _ = Describe("DPU: Node Effect Removal", func() {
 
 	// Helper function to create a node in the DPUCluster
 	createNodeInDPUCluster := func(dpu *provisioningv1.DPU, annotations map[string]string, addresses []corev1.NodeAddress) *corev1.Node {
+		// A node DPF has configured always carries its own label in the last applied record,
+		// so a caller that does not care about labels gets one that is already converged.
+		if annotations == nil {
+			annotations = map[string]string{
+				cutil.LastAppliedLabelsOnDPUKey: `{"provisioning.dpu.nvidia.com/dpu-node":"true"}`,
+			}
+		}
 		nodeInDPUCluster := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        dpu.Name,
@@ -787,7 +794,7 @@ var _ = Describe("DPU: Node Effect Removal", func() {
 
 			By("creating a Node in the DPUCluster")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
@@ -824,7 +831,7 @@ var _ = Describe("DPU: Node Effect Removal", func() {
 
 			By("creating a Node in the DPUCluster with stale labels to trigger bounce")
 			createNodeInDPUCluster(dpu,
-				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label"}`},
+				map[string]string{cutil.LastAppliedLabelsOnDPUKey: `{"old":"label","provisioning.dpu.nvidia.com/dpu-node":"true"}`},
 				nil,
 			)
 
