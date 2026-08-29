@@ -100,7 +100,7 @@ func PrepareBFB(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Con
 			state.JoinTokenExpiresAt = ptr.To(metav1.NewTime(expiresAt))
 		}
 	} else {
-		joinCommand, err := ctrlCtx.JoinCommandGenerator.GenerateJoinCommand(ctx, dc)
+		joinCommand, err := ctrlCtx.JoinCommandGenerator.GenerateJoinCommand(ctx, dc, dpu)
 		if err != nil {
 			err = fmt.Errorf("failed to generate join command: %w", err)
 			cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondBFBPrepared.String(), err, "FailedToGenerateJoinCommand", err.Error()))

@@ -49,7 +49,7 @@ func TestGenerateJoinCommand(t *testing.T) {
 
 	t.Run("valid join command generation", func(t *testing.T) {
 		generator := &KubeadmBootstrapTokenGenerator{testClient}
-		cmd, err := generator.GenerateJoinCommand(ctx, &dpuCluster)
+		cmd, err := generator.GenerateJoinCommand(ctx, &dpuCluster, &provisioningv1.DPU{})
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(cmd.Command).NotTo(BeEmpty())
 
@@ -169,7 +169,7 @@ type stubGenerator struct {
 	called bool
 }
 
-func (s *stubGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster) (JoinCommand, error) {
+func (s *stubGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster, *provisioningv1.DPU) (JoinCommand, error) {
 	s.called = true
 
 	return JoinCommand{Command: "stub", TokenID: "stub"}, nil
@@ -188,7 +188,7 @@ func TestJoinCommandGeneratorsDispatch(t *testing.T) {
 		stub := &stubGenerator{}
 		generators := &JoinCommandGenerators{kubeadm: stub}
 
-		cmd, err := generators.GenerateJoinCommand(context.Background(), staticCluster(provisioningv1.JoinTokenKubeadm))
+		cmd, err := generators.GenerateJoinCommand(context.Background(), staticCluster(provisioningv1.JoinTokenKubeadm), &provisioningv1.DPU{})
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(stub.called).To(BeTrue())
 		g.Expect(cmd.Command).To(Equal("stub"))
@@ -199,7 +199,7 @@ func TestJoinCommandGeneratorsDispatch(t *testing.T) {
 		stub := &stubGenerator{}
 		generators := &JoinCommandGenerators{kubeadm: stub}
 
-		_, err := generators.GenerateJoinCommand(context.Background(), staticCluster("rke2"))
+		_, err := generators.GenerateJoinCommand(context.Background(), staticCluster("rke2"), &provisioningv1.DPU{})
 		g.Expect(err).To(MatchError(ContainSubstring("no join command generator")))
 		g.Expect(stub.called).To(BeFalse(), "a wrong join shape must not be minted")
 	})

@@ -45,7 +45,7 @@ type JoinCommand struct {
 
 // NodeJoinCommandGenerator is an interface for generating join commands for DPU cluster nodes.
 type NodeJoinCommandGenerator interface {
-	GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error)
+	GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, dpu *provisioningv1.DPU) (JoinCommand, error)
 }
 
 // JoinTokenTTL reports how long a token minted for this cluster should live. Only a static
@@ -108,13 +108,14 @@ func NewJoinCommandGenerators(c client.Client) *JoinCommandGenerators {
 	}
 }
 
-// GenerateJoinCommand hands the cluster to the generator its join token type names. An
-// unknown type is an error rather than a fallback, since a wrong join shape fails on the card.
-func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster) (JoinCommand, error) {
+// GenerateJoinCommand hands the cluster and the DPU to the generator its join token type
+// names. An unknown type is an error rather than a fallback, since a wrong join shape fails
+// on the card.
+func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, dpu *provisioningv1.DPU) (JoinCommand, error) {
 	tokenType := JoinTokenTypeFor(dc)
 	switch tokenType {
 	case provisioningv1.JoinTokenKubeadm:
-		return g.kubeadm.GenerateJoinCommand(ctx, dc)
+		return g.kubeadm.GenerateJoinCommand(ctx, dc, dpu)
 	default:
 		return JoinCommand{}, fmt.Errorf("no join command generator for token type %q", tokenType)
 	}

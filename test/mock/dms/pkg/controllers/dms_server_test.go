@@ -320,7 +320,7 @@ func newCert(key *rsa.PrivateKey) (*x509.Certificate, error) {
 // The implementation is purely a stub as this command it outputs is never run.
 type mockKubeadmJoinCommandGenerator struct{}
 
-func (m *mockKubeadmJoinCommandGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster) (dutil.JoinCommand, error) {
+func (m *mockKubeadmJoinCommandGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster, *provisioningv1.DPU) (dutil.JoinCommand, error) {
 	return dutil.JoinCommand{Command: "soup", TokenID: "abcdef", ExpiresAt: time.Now().Add(dutil.DefaultJoinTokenTTL)}, nil
 }
 
