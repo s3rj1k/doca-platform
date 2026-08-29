@@ -126,6 +126,14 @@ spec:
                       rule: duration(self) >= duration('10m')
                     - message: ttl has to be at most 24h so a leaked token ages out
                       rule: duration(self) <= duration('24h')
+                  type:
+                    default: kubeadm
+                    description: |-
+                      Type selects how nodes join this cluster. Only read for clusters of type static,
+                      and kubeadm is assumed when it is not set.
+                    enum:
+                    - kubeadm
+                    type: string
                 type: object
               kubeconfig:
                 description: Kubeconfig is the secret that contains the admin kubeconfig

@@ -17,6 +17,7 @@ limitations under the License.
 package util
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -117,4 +118,100 @@ func TestJoinTokenTTL(t *testing.T) {
 func TestBootstrapTokenSecretName(t *testing.T) {
 	g := NewWithT(t)
 	g.Expect(BootstrapTokenSecretName("abc123")).To(Equal("bootstrap-token-abc123"))
+}
+
+// TestJoinTokenTypeFor pins the gate. A kamaji cluster gets kubeadm whatever it asks for,
+// which is what keeps this scoped to static clusters.
+func TestJoinTokenTypeFor(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		clusterType provisioningv1.ClusterType
+		joinToken   *provisioningv1.JoinTokenSpec
+		want        provisioningv1.JoinTokenType
+	}{
+		{
+			name:        "static asking for kubeadm",
+			clusterType: provisioningv1.StaticCluster,
+			joinToken:   &provisioningv1.JoinTokenSpec{Type: provisioningv1.JoinTokenKubeadm},
+			want:        provisioningv1.JoinTokenKubeadm,
+		},
+		{
+			name:        "static without a joinToken",
+			clusterType: provisioningv1.StaticCluster,
+			want:        provisioningv1.JoinTokenKubeadm,
+		},
+		{
+			name:        "static with an unset type",
+			clusterType: provisioningv1.StaticCluster,
+			joinToken:   &provisioningv1.JoinTokenSpec{},
+			want:        provisioningv1.JoinTokenKubeadm,
+		},
+		{
+			name:        "kamaji ignores a type it was given",
+			clusterType: provisioningv1.KamajiCluster,
+			joinToken:   &provisioningv1.JoinTokenSpec{Type: "somethingelse"},
+			want:        provisioningv1.JoinTokenKubeadm,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			dc := &provisioningv1.DPUCluster{Spec: provisioningv1.DPUClusterSpec{
+				Type:      string(tc.clusterType),
+				JoinToken: tc.joinToken,
+			}}
+			g.Expect(JoinTokenTypeFor(dc)).To(Equal(tc.want))
+		})
+	}
+}
+
+// stubGenerator records that it was reached, so dispatch can be observed without minting.
+type stubGenerator struct {
+	called bool
+}
+
+func (s *stubGenerator) GenerateJoinCommand(context.Context, *provisioningv1.DPUCluster) (JoinCommand, error) {
+	s.called = true
+
+	return JoinCommand{Command: "stub", TokenID: "stub"}, nil
+}
+
+func TestJoinCommandGeneratorsDispatch(t *testing.T) {
+	staticCluster := func(tokenType provisioningv1.JoinTokenType) *provisioningv1.DPUCluster {
+		return &provisioningv1.DPUCluster{Spec: provisioningv1.DPUClusterSpec{
+			Type:      string(provisioningv1.StaticCluster),
+			JoinToken: &provisioningv1.JoinTokenSpec{Type: tokenType},
+		}}
+	}
+
+	t.Run("routes to the generator the cluster named", func(t *testing.T) {
+		g := NewWithT(t)
+		stub := &stubGenerator{}
+		generators := &JoinCommandGenerators{kubeadm: stub}
+
+		cmd, err := generators.GenerateJoinCommand(context.Background(), staticCluster(provisioningv1.JoinTokenKubeadm))
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(stub.called).To(BeTrue())
+		g.Expect(cmd.Command).To(Equal("stub"))
+	})
+
+	t.Run("an unknown type is an error rather than a fallback", func(t *testing.T) {
+		g := NewWithT(t)
+		stub := &stubGenerator{}
+		generators := &JoinCommandGenerators{kubeadm: stub}
+
+		_, err := generators.GenerateJoinCommand(context.Background(), staticCluster("rke2"))
+		g.Expect(err).To(MatchError(ContainSubstring("no join command generator")))
+		g.Expect(stub.called).To(BeFalse(), "a wrong join shape must not be minted")
+	})
+
+	// Through the exported constructor, so that a generator built without the client is
+	// caught here rather than on a card.
+	t.Run("this build registers kubeadm", func(t *testing.T) {
+		g := NewWithT(t)
+		generators := NewJoinCommandGenerators(testClient)
+
+		kubeadm, ok := generators.kubeadm.(*KubeadmBootstrapTokenGenerator)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(kubeadm.Client).To(Equal(testClient))
+	})
 }

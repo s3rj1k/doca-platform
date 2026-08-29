@@ -109,8 +109,23 @@ type DPUClusterSpec struct {
 	JoinToken *JoinTokenSpec `json:"joinToken,omitempty"`
 }
 
+// JoinTokenType selects how a node authenticates when it joins the cluster.
+// +kubebuilder:validation:Enum=kubeadm
+type JoinTokenType string
+
+const (
+	// JoinTokenKubeadm mints a kubeadm bootstrap token and emits a kubeadm join command.
+	JoinTokenKubeadm JoinTokenType = "kubeadm"
+)
+
 // JoinTokenSpec configures the bootstrap token minted for nodes joining a DPUCluster.
 type JoinTokenSpec struct {
+	// Type selects how nodes join this cluster. Only read for clusters of type static,
+	// and kubeadm is assumed when it is not set.
+	// +kubebuilder:default=kubeadm
+	// +optional
+	Type JoinTokenType `json:"type,omitempty"`
+
 	// TTL is how long a minted join token authenticates for. It has to cover minting
 	// through BFB flashing and the DPU agent's first join attempt.
 	// +kubebuilder:default="2h"

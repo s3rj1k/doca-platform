@@ -280,7 +280,7 @@ func setupControllers(mgr ctrl.Manager, flags *cliFlags, bfbRegistry string, ima
 	if err := dpu.NewDPUReconciler(
 		mgr,
 		alloc,
-		&dutil.KubeadmBootstrapTokenGenerator{Client: mgr.GetClient()},
+		dutil.NewJoinCommandGenerators(mgr.GetClient()),
 		&reboot.DMSPodExecUptimeChecker{},
 		dpuOptions,
 		dpuMap,
