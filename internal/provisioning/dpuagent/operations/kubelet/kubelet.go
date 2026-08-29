@@ -202,19 +202,12 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 	if c.kubeletConfPath == "" {
 		c.kubeletConfPath = defaultKubeletConf
 	}
-	_ = os.Remove(c.caPath)
-	_ = os.Remove(c.bootstrapPath)
-	_ = os.Remove(c.kubeletConfPath)
-	if c.stopKubelet == nil {
-		c.stopKubelet = stopKubelet
+	c.cleanupKubeletFiles()
+	if err := c.stopKubeletService(); err != nil {
+		return err
 	}
-	if err := c.stopKubelet(); err != nil {
-		return fmt.Errorf("failed to stop kubelet: %w", err)
-	}
-
-	// Create kubelet systemd drop-in file
-	if err := c.createKubeletSystemdDropIn(); err != nil {
-		return fmt.Errorf("failed to create kubelet systemd drop-in: %w", err)
+	if err := c.writeKubeletSystemdDropIn(); err != nil {
+		return err
 	}
 
 	timeCtx, cancel := context.WithTimeout(execCtx, time.Minute)
@@ -234,9 +227,51 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 	if err != nil {
 		return fmt.Errorf("failed to run join command: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 	}
+	if err := c.applyKubeletCustomizedConfig(); err != nil {
+		return err
+	}
+	if err := c.recordKubeletVersion(optCtx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// cleanupKubeletFiles removes the credentials an earlier join left behind.
+func (c *ConfigureKubelet) cleanupKubeletFiles() {
+	_ = os.Remove(c.caPath)
+	_ = os.Remove(c.bootstrapPath)
+	_ = os.Remove(c.kubeletConfPath)
+}
+
+// stopKubeletService stops kubelet so the join does not race a running one.
+func (c *ConfigureKubelet) stopKubeletService() error {
+	if c.stopKubelet == nil {
+		c.stopKubelet = stopKubelet
+	}
+	if err := c.stopKubelet(); err != nil {
+		return fmt.Errorf("failed to stop kubelet: %w", err)
+	}
+	return nil
+}
+
+// writeKubeletSystemdDropIn installs the drop-in that points kubelet at the joined credentials.
+func (c *ConfigureKubelet) writeKubeletSystemdDropIn() error {
+	if err := c.createKubeletSystemdDropIn(); err != nil {
+		return fmt.Errorf("failed to create kubelet systemd drop-in: %w", err)
+	}
+	return nil
+}
+
+// applyKubeletCustomizedConfig merges the DPU specific settings into the kubelet config.
+func (c *ConfigureKubelet) applyKubeletCustomizedConfig() error {
 	if err := c.addKubeletCustomizedConfig(); err != nil {
 		return fmt.Errorf("failed to add kubelet customized config: %w", err)
 	}
+	return nil
+}
+
+// recordKubeletVersion reports the running kubelet version on the agent status.
+func (c *ConfigureKubelet) recordKubeletVersion(optCtx *operations.Context) error {
 	kubeletVersion, err := c.KubeletVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get kubelet version: %w", err)
