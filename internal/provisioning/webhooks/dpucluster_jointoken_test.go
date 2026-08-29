@@ -49,6 +49,14 @@ var _ = Describe("DPUCluster joinToken", func() {
 		DeferCleanup(k8sClient.Delete, context.Background(), obj)
 	})
 
+	It("accepts k0s as a type", func() {
+		obj := clusterWithJoinToken("jointoken-k0s", &provisioningv1.JoinTokenSpec{
+			Type: provisioningv1.JoinTokenK0s,
+		})
+		Expect(k8sClient.Create(context.Background(), obj)).To(Succeed())
+		DeferCleanup(k8sClient.Delete, context.Background(), obj)
+	})
+
 	It("rejects a type no build implements", func() {
 		err := k8sClient.Create(context.Background(), clusterWithJoinToken("jointoken-rke2",
 			&provisioningv1.JoinTokenSpec{Type: "rke2"}))
@@ -60,9 +68,9 @@ var _ = Describe("DPUCluster joinToken", func() {
 	// than prune keys it has no schema for.
 	It("keeps a config block it has no schema for", func() {
 		obj := clusterWithJoinToken("jointoken-config", &provisioningv1.JoinTokenSpec{
-			Type: provisioningv1.JoinTokenKubeadm,
+			Type: provisioningv1.JoinTokenK0s,
 			Config: &runtime.RawExtension{Raw: []byte(
-				`{"somethingTheAPIHasNeverHeardOf":"kept","anotherKey":"also kept"}`)},
+				`{"version":"1.36.3+k0s.2","profile":"dpu","somethingTheAPIHasNeverHeardOf":"kept"}`)},
 		})
 		Expect(k8sClient.Create(context.Background(), obj)).To(Succeed())
 		DeferCleanup(k8sClient.Delete, context.Background(), obj)
@@ -73,13 +81,13 @@ var _ = Describe("DPUCluster joinToken", func() {
 
 		Expect(fetched.Spec.JoinToken.Config).NotTo(BeNil())
 		Expect(string(fetched.Spec.JoinToken.Config.Raw)).To(ContainSubstring("somethingTheAPIHasNeverHeardOf"))
-		Expect(string(fetched.Spec.JoinToken.Config.Raw)).To(ContainSubstring("also kept"))
+		Expect(string(fetched.Spec.JoinToken.Config.Raw)).To(ContainSubstring("1.36.3+k0s.2"))
 	})
 
 	It("keeps a script template reference", func() {
 		obj := clusterWithJoinToken("jointoken-script-ref", &provisioningv1.JoinTokenSpec{
-			Type:              provisioningv1.JoinTokenKubeadm,
-			ScriptTemplateRef: &provisioningv1.ScriptTemplateRef{Name: "kubeadm-join-template", Key: "JOIN_SCRIPT"},
+			Type:              provisioningv1.JoinTokenK0s,
+			ScriptTemplateRef: &provisioningv1.ScriptTemplateRef{Name: "k0s-join-template", Key: "JOIN_SCRIPT"},
 		})
 		Expect(k8sClient.Create(context.Background(), obj)).To(Succeed())
 		DeferCleanup(k8sClient.Delete, context.Background(), obj)
@@ -88,14 +96,14 @@ var _ = Describe("DPUCluster joinToken", func() {
 		Expect(k8sClient.Get(context.Background(),
 			types.NamespacedName{Name: obj.Name, Namespace: obj.Namespace}, fetched)).To(Succeed())
 		Expect(fetched.Spec.JoinToken.ScriptTemplateRef).NotTo(BeNil())
-		Expect(fetched.Spec.JoinToken.ScriptTemplateRef.Name).To(Equal("kubeadm-join-template"))
+		Expect(fetched.Spec.JoinToken.ScriptTemplateRef.Name).To(Equal("k0s-join-template"))
 		Expect(fetched.Spec.JoinToken.ScriptTemplateRef.Key).To(Equal("JOIN_SCRIPT"))
 	})
 
 	It("rejects a script template reference naming no ConfigMap", func() {
 		err := k8sClient.Create(context.Background(), clusterWithJoinToken("jointoken-script-noname",
 			&provisioningv1.JoinTokenSpec{
-				Type:              provisioningv1.JoinTokenKubeadm,
+				Type:              provisioningv1.JoinTokenK0s,
 				ScriptTemplateRef: &provisioningv1.ScriptTemplateRef{},
 			}))
 		Expect(err).To(HaveOccurred())

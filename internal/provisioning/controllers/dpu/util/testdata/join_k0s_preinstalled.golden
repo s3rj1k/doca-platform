@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+# Rendered for DPU dpf-operator-system/dpu-node-1 and run by the DPU agent as bash.
+# The agent retries the whole script every 30s, so every step has to be idempotent.
+set -euo pipefail
+
+JOIN_TOKEN='c3RhbmRJblRva2Vu'
+NODE_NAME='dpu-node-1'
+CRI_SOCKET='remote:unix:///run/containerd/containerd.sock'
+K0S_PROFILE='dpu'
+KUBELET_ROOT_DIR='/var/lib/kubelet'
+EXTRA_ARGS='--labels dpu=true'
+READY_FILE='/var/lib/k0s/kubelet.conf'
+
+K0S_BIN='/usr/local/bin/k0s'
+TOKEN_FILE=/etc/k0s/join.token
+
+# No version was configured, so k0s has to be in the image already.
+if [ ! -x "$K0S_BIN" ]; then
+  echo "k0s is not installed at $K0S_BIN and no version was configured to download" >&2
+  exit 1
+fi
+
+# The token minted for this DPU.
+install -d -m 0700 "$(dirname "$TOKEN_FILE")"
+( umask 077; printf '%s' "$JOIN_TOKEN" > "$TOKEN_FILE" )
+
+# Raised limits and out of memory protection. The unit need not exist yet.
+install -d -m 0755 /etc/systemd/system/k0sworker.service.d
+cat > /etc/systemd/system/k0sworker.service.d/override.conf <<'OVERRIDE'
+[Service]
+LimitNOFILE=1048576
+OOMScoreAdjust=-999
+OVERRIDE
+systemctl daemon-reload
+
+# Reuses the agent's containerd and takes kubelet settings from the profile.
+# The node name must match the DPU object, otherwise DPF never sees the node.
+if [ ! -e /etc/systemd/system/k0sworker.service ]; then
+  "$K0S_BIN" install worker \
+    --token-file "$TOKEN_FILE" \
+    --cri-socket "$CRI_SOCKET" \
+    --profile "$K0S_PROFILE" \
+    --kubelet-root-dir "$KUBELET_ROOT_DIR" \
+    $EXTRA_ARGS \
+    --kubelet-extra-args="--hostname-override=$NODE_NAME"
+  systemctl daemon-reload
+fi
+"$K0S_BIN" start || systemctl restart k0sworker
+
+# A worker has no admin credentials, so wait on the kubelet kubeconfig. Exiting 0 without it
+# would have the agent report the DPU as joined when it never was.
+for _ in $(seq 60); do
+  [ -f "$READY_FILE" ] && break
+  sleep 5
+done
+if [ ! -f "$READY_FILE" ]; then
+  echo "k0s worker did not obtain kubelet credentials before the deadline" >&2
+  exit 1
+fi

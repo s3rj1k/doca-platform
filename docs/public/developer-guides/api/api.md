@@ -2618,9 +2618,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[JoinTokenType](#jointokentype)_ | Type selects how nodes join this cluster. Only read for clusters of type static,<br />and kubeadm is assumed when it is not set. | kubeadm | Enum: [kubeadm] <br />Optional: \{\} <br /> |
+| `type` _[JoinTokenType](#jointokentype)_ | Type selects how nodes join this cluster. Only read for clusters of type static,<br />and kubeadm is assumed when it is not set. | kubeadm | Enum: [kubeadm k0s] <br />Optional: \{\} <br /> |
 | `ttl` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | TTL is how long a minted join token authenticates for. It has to cover minting<br />through BFB flashing and the DPU agent's first join attempt.<br />Six digits per component keeps the hour count inside the int64 the bounds are evaluated in,<br />and repeating components keep a compound duration such as 1h30m valid. | 2h | Format: duration <br />MaxLength: 10 <br />Pattern: `^([0-9]\{1,6\}(h\|m\|s\|ms\|us\|µs\|ns))+$` <br />Type: string <br />Optional: \{\} <br /> |
-| `config` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#rawextension-runtime-pkg)_ | Config is read by the join mechanism Type names, so its keys belong to that mechanism<br />rather than to this API, and they reach its join script template.<br />Nothing here is validated on admission, so a bad value is reported on the DPU instead. |  | Optional: \{\} <br /> |
+| `config` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#rawextension-runtime-pkg)_ | Config is read by the join mechanism Type names, so its keys belong to that mechanism<br />rather than to this API. A kubeadm cluster reads nothing from it. A k0s cluster reads<br />version to download that release, url to take it from somewhere other than GitHub, and<br />sha256 to verify that download, and criSocket, profile, kubeletRootDir, extraArgs and<br />readyFile to configure the worker.<br />Nothing here is validated on admission, so a bad value is reported on the DPU instead. |  | Optional: \{\} <br /> |
 | `scriptTemplateRef` _[ScriptTemplateRef](#scripttemplateref)_ | ScriptTemplateRef replaces the join script the mechanism named by Type ships with. Read<br />from the namespace of this DPUCluster, so it cannot reach a ConfigMap the author cannot. |  | Optional: \{\} <br /> |
 
 
@@ -2631,7 +2631,7 @@ _Underlying type:_ _string_
 JoinTokenType selects how a node authenticates when it joins the cluster.
 
 _Validation:_
-- Enum: [kubeadm]
+- Enum: [kubeadm k0s]
 
 _Appears in:_
 - [JoinTokenSpec](#jointokenspec)
@@ -2639,6 +2639,7 @@ _Appears in:_
 | Field | Description |
 | --- | --- |
 | `kubeadm` | JoinTokenKubeadm mints a kubeadm bootstrap token and emits a kubeadm join command.<br /> |
+| `k0s` | JoinTokenK0s mints a k0s worker token and emits the script that joins with it.<br /> |
 
 
 #### K8sCluster

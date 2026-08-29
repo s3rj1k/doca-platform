@@ -144,6 +144,65 @@ to this ConfigMap is therefore worth treating as equivalent to write access to t
 controller's workload, and should be granted accordingly.
 
 
+##### Joining a k0s cluster
+
+A static DPUCluster chooses how its nodes authenticate when they join. The default is `kubeadm`,
+which suits a control plane built with kubeadm. For a k0s cluster set `joinToken.type` to `k0s`
+and describe the worker under `joinToken.config`:
+
+```yaml
+spec:
+  type: static
+  maxNodes: 1000
+  kubeconfig: dpu-cluster-1-admin-kubeconfig
+  joinToken:
+    type: k0s
+    ## Read by the mechanism named above, so these keys belong to k0s rather than to DPF.
+    ## None of them is validated when the object is applied. A bad value is reported on the
+    ## DPU as BFBPrepared=False instead.
+    config:
+      ## The release to download from GitHub. Leave it out when k0s is already in the BFB,
+      ## in which case the join fails on the DPU if it turns out not to be.
+      version: "1.36.3+k0s.2"
+      ## Optional, takes the binary from somewhere other than GitHub. Needs version set.
+      ## Glob metacharacters are rejected in every value, so a URL carrying one, such as an S3
+      ## presigned URL or an IPv6 literal host, has to be fronted by a mirror without them.
+      # url: https://mirror.example.com/k0s-arm64
+      ## Optional. The downloaded binary is installed and run as root, and without this it is
+      ## trusted on TLS alone. Needs version set.
+      # sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+      criSocket: remote:unix:///run/containerd/containerd.sock
+      profile: dpu
+      kubeletRootDir: /var/lib/kubelet
+      extraArgs: "--labels dpu=true"
+      ## The file the join waits for to prove the worker got its credentials. Name the new path
+      ## here when extraArgs moves the k0s data dir, otherwise the join reports a failure.
+      readyFile: /var/lib/k0s/kubelet.conf
+```
+
+The DPUFlavor used with a k0s cluster needs three skips. The DPU agent runs the join script as
+part of its ConfigureKubelet step, so that step must be left enabled, while the parts of the
+agent's kubelet handling that would fight k0s are turned off:
+
+```yaml
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUFlavor
+spec:
+  dpuAgentConfig:
+    skipOperations:
+      ## Not configureKubelet, which is what runs the join script.
+      ## The agent would otherwise write a drop-in for a kubelet k0s supervises itself.
+      kubeletSystemdDropIn: true
+      ## The agent would otherwise parse a config file k0s does not write.
+      kubeletCustomizedConfig: true
+      ## Required. The agent starts the stock kubelet after the join, which would then fight
+      ## the one k0s supervises over the same root directory and port.
+      startKubelet: true
+```
+
+Leaving `startKubelet` unset is the mistake that is hardest to spot, because provisioning
+reports the DPU ready and the node only afterwards begins flapping between Ready and NotReady.
+
 #### Using the Kamaji Cluster Manager
 
 The DPUCluster will look like:
