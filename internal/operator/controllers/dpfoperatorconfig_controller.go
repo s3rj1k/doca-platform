@@ -566,6 +566,15 @@ func (r *DPFOperatorConfigReconciler) validateKubernetesVersionSkew(ctx context.
 	}
 
 	for _, dpuCluster := range dpuClusters {
+		// A cluster whose manager DPF does not ship installs the kubelet its own way and drives its own
+		// control plane version, so validating it would fail every DPU on a version absent by design.
+		if !isBuiltinClusterType(dpuCluster.Cluster.Spec.Type) {
+			log.V(4).Info("Skipping version skew validation for an externally managed DPUCluster",
+				"cluster", dpuCluster.Cluster.Name, "namespace", dpuCluster.Cluster.Namespace,
+				"type", dpuCluster.Cluster.Spec.Type)
+			continue
+		}
+
 		// Determine the kube-apiserver version to validate against.
 		// For kamaji clusters: the KubernetesVersion constant (the version we're upgrading to).
 		// For other clusters (e.g. static): the actual kube-apiserver version from Status.Version.
@@ -610,6 +619,13 @@ func (r *DPFOperatorConfigReconciler) validateKubernetesVersionSkew(ctx context.
 		return fmt.Errorf("kubernetes version skew violated: %w", kerrors.NewAggregate(errs))
 	}
 	return nil
+}
+
+// isBuiltinClusterType reports whether DPF ships the cluster manager for this DPUCluster.
+// Anything else is out-of-tree, named "<prefix>/<name>", and DPF neither joins nor versions it.
+func isBuiltinClusterType(clusterType string) bool {
+	return clusterType == string(provisioningv1.KamajiCluster) ||
+		clusterType == string(provisioningv1.StaticCluster)
 }
 
 func (r *DPFOperatorConfigReconciler) getDPUsForCluster(ctx context.Context, cluster *provisioningv1.DPUCluster) ([]provisioningv1.DPU, error) {
