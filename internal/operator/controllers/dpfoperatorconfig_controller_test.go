@@ -1954,6 +1954,78 @@ func TestValidateKubernetesVersionSkew(t *testing.T) {
 		g.Expect(testClient.Delete(ctx, dpu2)).To(Succeed())
 		g.Expect(testClient.Delete(ctx, kamajiCluster)).To(Succeed())
 	})
+
+	t.Run("skips clusters whose manager DPF does not ship", func(t *testing.T) {
+		// An out-of-tree manager installs the kubelet its own way, so nothing reports KubeletVersion
+		// and Status.Version is not DPF's to set either. Both would otherwise be errors.
+		externalCluster := &provisioningv1.DPUCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "external-cluster-skipped",
+				Namespace: testNS.Name,
+			},
+			Spec: provisioningv1.DPUClusterSpec{
+				Type: "example.com/k0smotron",
+			},
+		}
+		g.Expect(testClient.Create(ctx, externalCluster)).To(Succeed())
+
+		// No kubelet version, and the cluster reports no apiserver version.
+		dpu := createDPU("dpu-external-no-kubelet", externalCluster, nil)
+
+		dpuClusters := []*dpucluster.Config{
+			dpucluster.NewConfig(testClient, externalCluster),
+		}
+
+		r := newReconciler()
+		g.Expect(r.validateKubernetesVersionSkew(ctx, &operatorv1.DPFOperatorConfig{}, dpuClusters)).To(Succeed())
+
+		// Cleanup
+		g.Expect(testClient.Delete(ctx, dpu)).To(Succeed())
+		g.Expect(testClient.Delete(ctx, externalCluster)).To(Succeed())
+	})
+
+	t.Run("still validates the cluster types DPF ships", func(t *testing.T) {
+		// Guards the skip above from widening. A kamaji DPU reporting no kubelet version is
+		// still an error, and so is a static cluster with no apiserver version.
+		kamajiCluster := &provisioningv1.DPUCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kamaji-cluster-not-skipped",
+				Namespace: testNS.Name,
+			},
+			Spec: provisioningv1.DPUClusterSpec{
+				Type: string(provisioningv1.KamajiCluster),
+			},
+		}
+		g.Expect(testClient.Create(ctx, kamajiCluster)).To(Succeed())
+		dpu := createDPU("dpu-kamaji-no-kubelet", kamajiCluster, nil)
+
+		r := newReconciler()
+		err := r.validateKubernetesVersionSkew(ctx, &operatorv1.DPFOperatorConfig{},
+			[]*dpucluster.Config{dpucluster.NewConfig(testClient, kamajiCluster)})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("dpu-kamaji-no-kubelet"))
+
+		staticCluster := &provisioningv1.DPUCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "static-cluster-not-skipped",
+				Namespace: testNS.Name,
+			},
+			Spec: provisioningv1.DPUClusterSpec{
+				Type: string(provisioningv1.StaticCluster),
+			},
+		}
+		g.Expect(testClient.Create(ctx, staticCluster)).To(Succeed())
+
+		err = r.validateKubernetesVersionSkew(ctx, &operatorv1.DPFOperatorConfig{},
+			[]*dpucluster.Config{dpucluster.NewConfig(testClient, staticCluster)})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("has no version"))
+
+		// Cleanup
+		g.Expect(testClient.Delete(ctx, dpu)).To(Succeed())
+		g.Expect(testClient.Delete(ctx, kamajiCluster)).To(Succeed())
+		g.Expect(testClient.Delete(ctx, staticCluster)).To(Succeed())
+	})
 }
 
 func TestGetDPUKubeletVersion(t *testing.T) {
