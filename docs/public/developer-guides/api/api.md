@@ -2368,6 +2368,7 @@ _Appears in:_
 | `maxNodes` _integer_ | MaxNodes is the max amount of node in the cluster | 1000 | Maximum: 3000 <br />Minimum: 1 <br />Optional: \{\} <br /> |
 | `kubeconfig` _string_ | Kubeconfig is the secret that contains the admin kubeconfig |  | Optional: \{\} <br /> |
 | `clusterEndpoint` _[ClusterEndpointSpec](#clusterendpointspec)_ | ClusterEndpoint contains configurations of the cluster entry point |  | Optional: \{\} <br /> |
+| `clusterManagerConfig` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#rawextension-runtime-pkg)_ | ClusterManagerConfig is handed to the cluster manager named by Type, which owns its<br />schema and validates it. A manager that does not read it ignores it. |  | Optional: \{\} <br /> |
 
 
 #### DPUClusterStaticKeyEncryptionStatus

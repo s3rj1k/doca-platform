@@ -104,6 +104,12 @@ spec:
                     - virtualRouterID
                     type: object
                 type: object
+              clusterManagerConfig:
+                description: |-
+                  ClusterManagerConfig is handed to the cluster manager named by Type, which owns its
+                  schema and validates it. A manager that does not read it ignores it.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               kubeconfig:
                 description: Kubeconfig is the secret that contains the admin kubeconfig
                 type: string

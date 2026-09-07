@@ -20,6 +20,7 @@ import (
 	"github.com/nvidia/doca-platform/pkg/conditions"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -106,6 +107,12 @@ type DPUClusterSpec struct {
 	// ClusterEndpoint contains configurations of the cluster entry point
 	// +optional
 	ClusterEndpoint *ClusterEndpointSpec `json:"clusterEndpoint,omitempty"`
+
+	// ClusterManagerConfig is handed to the cluster manager named by Type, which owns its
+	// schema and validates it. A manager that does not read it ignores it.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	ClusterManagerConfig *runtime.RawExtension `json:"clusterManagerConfig,omitempty"`
 }
 
 // DPUClusterStatus defines the observed state of DPUCluster

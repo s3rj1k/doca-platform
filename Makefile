@@ -1269,7 +1269,7 @@ GO_LDFLAGS=-s -w -extldflags '-static'
 GO_GCFLAGS=-trimpath
 
 BUILD_TARGETS ?= $(DPU_ARCH_BUILD_TARGETS)
-DPF_SYSTEM_BUILD_TARGETS ?= operator provisioning dpuservice servicechainset kamaji-cluster-manager static-cluster-manager \
+DPF_SYSTEM_BUILD_TARGETS ?= operator provisioning dpuservice servicechainset kamaji-cluster-manager static-cluster-manager k0smotron-cluster-manager \
 	sfc-controller dpfctl dpudetector nodesriovdeviceplugin-controller nodesriovdeviceplugin-init dpf-kms-plugin
 DPU_ARCH_BUILD_TARGETS ?=
 # contains list of storage-related binaries that have no system-level dependencies
@@ -1322,6 +1322,10 @@ binary-kamaji-cluster-manager: ## Build the kamaji-cluster-manager binary.
 .PHONY: binary-static-cluster-manager
 binary-static-cluster-manager: ## Build the static-cluster-manager binary.
 	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build -buildvcs=false -ldflags="$(GO_LDFLAGS)" -gcflags="$(GO_GCFLAGS)" -trimpath -o $(LOCALBIN)/static-cluster-manager github.com/nvidia/doca-platform/cmd/static-cluster-manager
+
+.PHONY: binary-k0smotron-cluster-manager
+binary-k0smotron-cluster-manager: ## Build the k0smotron-cluster-manager binary.
+	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build -buildvcs=false -ldflags="$(GO_LDFLAGS)" -gcflags="$(GO_GCFLAGS)" -trimpath -o $(LOCALBIN)/k0smotron-cluster-manager github.com/nvidia/doca-platform/cmd/k0smotron-cluster-manager
 
 .PHONY: binary-dpuservice
 binary-dpuservice: ## Build the dpuservice controller binary.
