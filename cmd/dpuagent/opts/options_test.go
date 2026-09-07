@@ -73,3 +73,51 @@ var _ = Describe("Options.Validate SPIFFE mode", func() {
 		Expect(o.ZeroTrustMode).To(BeTrue())
 	})
 })
+
+var _ = Describe("Options.JoinSecret", func() {
+	// The kubeadm pair names the Secret every DPU already uses, so the join named flags
+	// have to fall back to it rather than replace it.
+	base := func() Options {
+		return Options{
+			KubeadmSecretName:      "dpu-1-kubeadm-join",
+			KubeadmSecretNamespace: "dpf-operator-system",
+		}
+	}
+
+	It("falls back to the kubeadm pair when neither join flag is set", func() {
+		name, namespace := base().JoinSecret()
+		Expect(name).To(Equal("dpu-1-kubeadm-join"))
+		Expect(namespace).To(Equal("dpf-operator-system"))
+	})
+
+	It("prefers the join named flags when both are set", func() {
+		o := base()
+		o.JoinSecretName = "dpu-1-join"
+		o.JoinSecretNamespace = "elsewhere"
+		name, namespace := o.JoinSecret()
+		Expect(name).To(Equal("dpu-1-join"))
+		Expect(namespace).To(Equal("elsewhere"))
+	})
+
+	It("takes the name from the join flag and the namespace from kubeadm", func() {
+		o := base()
+		o.JoinSecretName = "dpu-1-join"
+		name, namespace := o.JoinSecret()
+		Expect(name).To(Equal("dpu-1-join"))
+		Expect(namespace).To(Equal("dpf-operator-system"))
+	})
+
+	It("takes the namespace from the join flag and the name from kubeadm", func() {
+		o := base()
+		o.JoinSecretNamespace = "elsewhere"
+		name, namespace := o.JoinSecret()
+		Expect(name).To(Equal("dpu-1-kubeadm-join"))
+		Expect(namespace).To(Equal("elsewhere"))
+	})
+
+	It("reports empty when nothing names a Secret", func() {
+		name, namespace := Options{}.JoinSecret()
+		Expect(name).To(BeEmpty())
+		Expect(namespace).To(BeEmpty())
+	})
+})

@@ -35,6 +35,7 @@ import (
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/getdpu"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/grub"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/hostosinit"
+	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/joinpayload"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/kernelmodule"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/kubelet"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations/laststartuptime"
@@ -114,6 +115,9 @@ func NewDPUAgent(optCtx *operations.Context) *DPUAgent {
 		&checkbridge.CheckBridge{},
 		&kubelet.ConfigureKubelet{},
 		&kubelet.StartKubelet{},
+		// Sits alongside ConfigureKubelet rather than inside it. A cluster manager that
+		// joins its nodes some other way skips both kubelet operations and runs this.
+		&joinpayload.RunJoinPayload{},
 		&nodelabels.ReportNodeLabels{},
 		&hostosinit.ReleaseHostOSInit{},
 	}

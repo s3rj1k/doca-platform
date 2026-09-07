@@ -66,6 +66,28 @@ type Options struct {
 	SkipDPUMode                bool
 	SkipNVConfig               bool
 	SkipReboot                 bool
+
+	// RunJoinPayload runs the rendered join payload instead of leaving the join to
+	// ConfigureKubelet. Set it for a cluster whose nodes do not join with kubeadm.
+	RunJoinPayload bool
+	// JoinSecretName and JoinSecretNamespace name the Secret holding the join payload.
+	// They default to the kubeadm pair, whose names predate any non kubeadm join.
+	JoinSecretName      string
+	JoinSecretNamespace string
+}
+
+// JoinSecret reports where the join payload lives, preferring the join named flags and
+// falling back to the kubeadm pair that carries the same Secret today.
+func (o Options) JoinSecret() (name, namespace string) {
+	name, namespace = o.JoinSecretName, o.JoinSecretNamespace
+	if name == "" {
+		name = o.KubeadmSecretName
+	}
+	if namespace == "" {
+		namespace = o.KubeadmSecretNamespace
+	}
+
+	return name, namespace
 }
 
 func (o Options) Validate() error {
