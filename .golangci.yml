@@ -68,6 +68,8 @@ linters:
           alias: nvipamv1
         - pkg: github.com/nvidia/doca-platform/third_party/forked/github.com/clastix/kamaji/api/v1alpha1
           alias: kamajiv1
+        - pkg: github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2
+          alias: k0smotronv1
         - pkg: github.com/nvidia/doca-platform/third_party/forked/argoproj/argo-cd/pkg/apis/application/v1alpha1
           alias: argov1
         # Controller Runtime

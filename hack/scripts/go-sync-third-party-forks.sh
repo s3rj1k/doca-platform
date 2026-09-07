@@ -103,5 +103,49 @@ function sync_spiffe_spire_controller_manager() {
 		paths="./third_party/forked/github.com/spiffe/spire-controller-manager/api/..."
 }
 
+# Sync k0smotron, only the standalone types as the CAPI groups are unused and the module
+# cannot be imported. Deepcopy is regenerated, since the upstream one covers dropped kinds.
+function sync_k0sproject_k0smotron() {
+	pushd third_party/forked/github.com/k0sproject/k0smotron/
+
+	upstream_dir="${PWD}/tmp-upstream"
+	trap 'rm -rf "${upstream_dir}"' EXIT
+
+	TARGET_COMMIT="62231f3adc8cbc313622d8696f783e38fa1137d2" # this is tag v2.1.0
+
+	# cleanup old files
+	rm -rf api "${upstream_dir}"
+
+	# clone upstream repository
+	git clone https://github.com/k0sproject/k0smotron.git "${upstream_dir}"
+	pushd "${upstream_dir}"
+	git checkout "${TARGET_COMMIT}"
+	popd
+
+	# copy over required files, which is the two standalone kinds and their scheme
+	mkdir -p api/k0smotron.io/v1beta2
+	cp "${upstream_dir}/api/k0smotron.io/v1beta2/k0smotroncluster_types.go" api/k0smotron.io/v1beta2/
+	cp "${upstream_dir}/api/k0smotron.io/v1beta2/jointokenrequest_types.go" api/k0smotron.io/v1beta2/
+	cp "${upstream_dir}/api/k0smotron.io/v1beta2/groupversion_info.go" api/k0smotron.io/v1beta2/
+
+	# CRDs are used by envtest to validate the objects DPF writes
+	cp "${upstream_dir}/config/standalone/crd/bases/k0smotron.io_clusters.yaml" ../../../../../test/objects/crd/k0smotron/clusters.yaml
+	cp "${upstream_dir}/config/standalone/crd/bases/k0smotron.io_jointokenrequests.yaml" ../../../../../test/objects/crd/k0smotron/jointokenrequests.yaml
+
+	# cleanup cloned repository
+	rm -rf "${upstream_dir}"
+
+	# remove all test related files
+	find . -type f -name '*_test.go' -delete
+
+	popd
+
+	# keep the upstream copyright header, as this is derived from upstream types
+	hack/tools/bin/controller-gen \
+		object:headerFile="third_party/forked/github.com/k0sproject/k0smotron/boilerplate.go.txt" \
+		paths="./third_party/forked/github.com/k0sproject/k0smotron/api/..."
+}
+
 sync_clastix_kamaji
 sync_spiffe_spire_controller_manager
+sync_k0sproject_k0smotron
