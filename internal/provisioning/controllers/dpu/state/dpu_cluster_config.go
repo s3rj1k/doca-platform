@@ -98,8 +98,15 @@ func ClusterConfig(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.
 		return *state, err
 	}
 
-	// Revoke the short-lived kubeadm bootstrap token once the node has joined.
-	if err := dutil.DeleteNodeJoinBootstrapTokens(ctx, newClient, dpu.Name, dpu.Namespace); err != nil {
+	// Revoke the short-lived join token once the node has joined. A k0smotron token lives in
+	// this cluster as the request that minted it, not as a bootstrap token in the child.
+	if dpuCluster.Spec.Type == dutil.K0smotronClusterType {
+		if err := dutil.DeleteK0smotronJoinToken(ctx, ctrlCtx.Client, dpuCluster, dpu); err != nil {
+			err = fmt.Errorf("failed to delete k0smotron join token: %w", err)
+			cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondDPUClusterReady.String(), err, "DeleteK0smotronJoinTokenError", err.Error()))
+			return *state, err
+		}
+	} else if err := dutil.DeleteNodeJoinBootstrapTokens(ctx, newClient, dpu.Name, dpu.Namespace); err != nil {
 		err = fmt.Errorf("failed to delete node-join bootstrap tokens: %w", err)
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondDPUClusterReady.String(), err, "DeleteNodeJoinBootstrapTokensError", err.Error()))
 		return *state, err

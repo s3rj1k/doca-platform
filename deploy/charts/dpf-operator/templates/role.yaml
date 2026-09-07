@@ -185,6 +185,21 @@ rules:
   - update
   - watch
 - apiGroups:
+  - k0smotron.io
+  resources:
+  - clusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - k0smotron.io
+  resources:
+  - jointokenrequests
+  verbs:
+  - create
+  - delete
+- apiGroups:
   - kamaji.clastix.io
   resources:
   - tenantcontrolplanes

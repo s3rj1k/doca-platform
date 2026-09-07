@@ -39,6 +39,36 @@ type NodeJoinCommandGenerator interface {
 	GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, dpu *provisioningv1.DPU) (string, error)
 }
 
+// JoinCommandGenerators dispatches to the generator a cluster's type calls for. It is itself
+// a NodeJoinCommandGenerator, so the call site does not know a choice is being made.
+type JoinCommandGenerators struct {
+	// Default handles kamaji and static, whose nodes join with kubeadm.
+	Default NodeJoinCommandGenerator
+	// ByClusterType holds the generators an out of tree manager registers for its own
+	// DPUCluster type.
+	ByClusterType map[string]NodeJoinCommandGenerator
+}
+
+// NewJoinCommandGenerators returns the generators this build knows how to run.
+func NewJoinCommandGenerators(c client.Client) *JoinCommandGenerators {
+	return &JoinCommandGenerators{
+		Default: &KubeadmBootstrapTokenGenerator{Client: c},
+		ByClusterType: map[string]NodeJoinCommandGenerator{
+			K0smotronClusterType: &K0smotronJoinTokenGenerator{Client: c},
+		},
+	}
+}
+
+// GenerateJoinCommand hands the cluster and the DPU to the generator its type names. An
+// unregistered type falls back to kubeadm, which is how kamaji and static already join.
+func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, dpu *provisioningv1.DPU) (string, error) {
+	if generator, ok := g.ByClusterType[dc.Spec.Type]; ok {
+		return generator.GenerateJoinCommand(ctx, dc, dpu)
+	}
+
+	return g.Default.GenerateJoinCommand(ctx, dc, dpu)
+}
+
 // KubeadmBootstrapTokenGenerator is a NodeJoinCommandGenerator that generates join commands following the kubeadm bootstrap token authentication method.
 // It creates a bootstrap token secret and returns the join command.
 // This join process is based on the kubeadm implementation.

@@ -237,6 +237,12 @@ func deleteNodeJoinBootstrapTokens(ctx context.Context, client crclient.Client, 
 		}
 		return err
 	}
+	// A k0smotron token is revoked by deleting the request that minted it, which lives in
+	// this cluster. Reaching into the child would need credentials the token itself gates.
+	if dc.Spec.Type == dutil.K0smotronClusterType {
+		return dutil.DeleteK0smotronJoinToken(ctx, client, dc, dpu)
+	}
+
 	dpuClusterClient, err := dpucluster.NewConfig(client, dc).Client(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create client for DPU cluster: %w", err)

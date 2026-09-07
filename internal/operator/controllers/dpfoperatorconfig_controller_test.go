@@ -29,6 +29,7 @@ import (
 	argocdpkg "github.com/nvidia/doca-platform/internal/argocd"
 	"github.com/nvidia/doca-platform/internal/digest"
 	"github.com/nvidia/doca-platform/internal/operator/inventory"
+	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	"github.com/nvidia/doca-platform/internal/release"
 	"github.com/nvidia/doca-platform/pkg/conditions"
@@ -1530,6 +1531,28 @@ func TestDPFOperatorConfigReconciler_ReconcilePreUpgradeValidations(t *testing.T
 
 		g.Expect(testutils.CleanupAndWait(ctx, testClient, config)).To(Succeed())
 	})
+}
+
+// TestIsBuiltinClusterType pins the skew exemption to the cluster types DPF ships. The
+// k0smotron manager relies on it, since a k0s worker reports no KubeletVersion.
+func TestIsBuiltinClusterType(t *testing.T) {
+	tests := []struct {
+		clusterType string
+		want        bool
+	}{
+		{string(provisioningv1.KamajiCluster), true},
+		{string(provisioningv1.StaticCluster), true},
+		// The type the k0smotron cluster manager owns, so it has to be exempt.
+		{dutil.K0smotronClusterType, false},
+		{"example.com/some-isv-manager", false},
+		{"", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("%q", tc.clusterType), func(t *testing.T) {
+			NewWithT(t).Expect(isBuiltinClusterType(tc.clusterType)).To(Equal(tc.want))
+		})
+	}
 }
 
 func TestValidateKubernetesVersionSkew(t *testing.T) {

@@ -17,12 +17,15 @@ limitations under the License.
 package state_test
 
 import (
+	"time"
+
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/state"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	dpucluster "github.com/nvidia/doca-platform/pkg/dpucluster"
 	testutils "github.com/nvidia/doca-platform/test/utils"
+	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -41,6 +44,75 @@ var _ = Describe("DPU: cluster config", func() {
 		defaultDPUClusterName = "dpu-cluster-cluster-config-test"
 		strTrue               = "true"
 	)
+
+	Context("k0smotron cluster", func() {
+		// The kubeadm path retires its bootstrap token the moment the node joins. Without the
+		// same step here a k0smotron token stays usable for its whole expiry after the fact.
+		It("revokes the join token once the node has joined", func() {
+			dpuDevice := dpuDeviceObj(defaultDPUDeviceName)
+			createObject(dpuDevice)
+
+			dpuNode := dpuNodeObj(defaultDPUNodeName)
+			dpuNode.Finalizers = []string{provisioningv1.DPUNodeFinalizer}
+			dpuNode.Labels[cutil.NodeFeatureDiscoveryLabelPrefix+cutil.DPUOOBBridgeConfiguredLabel] = strTrue
+			dpuNode.Spec.DPUs = []provisioningv1.DPURef{{Name: dpuDevice.Name}}
+			createObject(dpuNode)
+			patch := client.MergeFrom(dpuNode.DeepCopy())
+			dpuNode.Status.DPUInstallInterface = ptr.To(string(provisioningv1.InstallViaGNOI))
+			Expect(k8sClient.Status().Patch(ctx, dpuNode, patch)).To(Succeed())
+
+			dpuCluster := dpuClusterObj(defaultDPUClusterName, dutil.K0smotronClusterType)
+			clusterSecret, err := testutils.GetFakeKamajiClusterSecretFromEnvtest(*dpuCluster, cfg)
+			Expect(err).ToNot(HaveOccurred())
+			createObject(clusterSecret)
+			createObject(dpuCluster)
+			dpuClusterClient, err := dpucluster.NewConfig(k8sClient, dpuCluster).Client(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			dpu := dpuObj(defaultDPUName)
+			dpu.Spec.PCIAddress = ptr.To("0000-00-00")
+			dpu.Spec.DPUNodeName = dpuNode.Name
+			dpu.Spec.DPUDeviceName = dpuDevice.Name
+			dpu.Spec.Cluster.Namespace = dpuCluster.Namespace
+			dpu.Spec.Cluster.Name = dpuCluster.Name
+			dpu.Status.Phase = provisioningv1.DPUClusterConfig
+			dpu.Status.DPUInstallInterface = ptr.To(string(provisioningv1.InstallViaGNOI))
+
+			nodeInDPUCluster := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: dpu.Name},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+				},
+			}
+			Expect(dpuClusterClient.Create(ctx, nodeInDPUCluster)).To(Succeed())
+			DeferCleanup(testutils.CleanupAndWait, ctx, dpuClusterClient, nodeInDPUCluster)
+
+			By("the JoinTokenRequest that minted this DPU's token")
+			request := &k0smotronv1.JoinTokenRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dutil.K0smotronJoinTokenRequestName(dpu),
+					Namespace: dpuCluster.Namespace,
+				},
+				Spec: k0smotronv1.JoinTokenRequestSpec{ClusterName: dpuCluster.Name, Role: "worker"},
+			}
+			createObject(request)
+
+			status, err := state.ClusterConfig(ctx, dpu, &dutil.ControllerContext{
+				Client: k8sClient,
+				Options: dutil.DPUOptions{
+					DPUInstallInterface: string(provisioningv1.InstallViaGNOI),
+				},
+			})
+			Expect(err).To(Succeed())
+			Expect(status.Phase).To(Equal(provisioningv1.DPUServiceReadiness))
+
+			By("the request, and so the token it minted, is gone")
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(request), &k0smotronv1.JoinTokenRequest{})
+				return apierrors.IsNotFound(err)
+			}).WithTimeout(10 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+		})
+	})
 
 	Context("successful cases", func() {
 		It("Update labels", func() {

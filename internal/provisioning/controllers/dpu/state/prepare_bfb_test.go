@@ -28,6 +28,7 @@ import (
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/state"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
+	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -545,6 +546,106 @@ var _ = Describe("DPU: PrepareBFB", func() {
 
 		_, err = os.Stat(status.BFCFGFile)
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	// The k0s worker script goes into the same Secret and key as a kubeadm command, which
+	// is what lets a non kubeadm cluster join without touching the provisioning states.
+	It("should write the rendered k0s join script into the join secret", func() {
+		createDPFOperatorConfig()
+
+		node := nodeObj(defaultNodeName)
+		createObject(node)
+
+		flavor := dpuFlavorObj(defaultFlavorName)
+		createObject(flavor)
+
+		cluster := dpuClusterObj(defaultClusterName, dutil.K0smotronClusterType)
+		createObject(cluster)
+
+		// The control plane and the token k0smotron would have published for this DPU.
+		createObject(&k0smotronv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: defaultClusterName, Namespace: testNS.Name},
+			Spec: k0smotronv1.ClusterSpec{
+				Version: "v1.35.6+k0s.0",
+				Service: k0smotronv1.ServiceSpec{Type: corev1.ServiceTypeNodePort},
+			},
+		})
+		dpuForToken := &provisioningv1.DPU{
+			ObjectMeta: metav1.ObjectMeta{Name: defaultDPUName, Namespace: testNS.Name},
+		}
+		createObject(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      dutil.K0smotronJoinTokenRequestName(dpuForToken),
+				Namespace: testNS.Name,
+			},
+			Data: map[string][]byte{"token": []byte("a-worker-token")},
+		})
+
+		dpuNode := dpuNodeObj(defaultNodeName)
+		createObject(dpuNode)
+		patch := client.MergeFrom(dpuNode.DeepCopy())
+		dpuNode.Status.KubeNodeRef = ptr.To(node.Name)
+		Expect(k8sClient.Status().Patch(ctx, dpuNode, patch)).To(Succeed())
+
+		dpuDevice := dpuDeviceObj(defaultDeviceName)
+		createObject(dpuDevice)
+
+		dpu := dpuObj(defaultDPUName)
+		dpu.Spec.DPUFlavor = defaultFlavorName
+		dpu.Spec.Cluster = provisioningv1.K8sCluster{
+			Name:      defaultClusterName,
+			Namespace: testNS.Name,
+		}
+		dpu.Spec.DPUNodeName = dpuNode.Name
+		dpu.Spec.DPUDeviceName = defaultDeviceName
+		dpu.Status.Phase = provisioningv1.DPUPrepareBFB
+
+		tempDir, err := os.MkdirTemp("", "bfb-test")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(tempDir) }()
+
+		originalBFBBaseDir := cutil.BFBBaseDir
+		cutil.BFBBaseDir = tempDir
+		defer func() { cutil.BFBBaseDir = originalBFBBaseDir }()
+
+		// The real dispatcher, so the cluster type is what picks the k0smotron generator.
+		status, err := state.PrepareBFB(ctx, dpu,
+			&dutil.ControllerContext{
+				Client:               k8sClient,
+				JoinCommandGenerator: dutil.NewJoinCommandGenerators(k8sClient),
+				DPUArtifactGenerator: &mockDPUArtifactGenerator{
+					bf3: []byte("bf.cfg"),
+				},
+				Options: dutil.DPUOptions{
+					DPUInstallInterface: string(provisioningv1.InstallViaGNOI),
+				},
+			},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.Phase).To(Equal(provisioningv1.DPUOSInstalling))
+
+		By("the join secret carries the k0s script, not a kubeadm command")
+		joinSecret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Namespace: testNS.Name,
+			Name:      cutil.KubeadmJoinSecretName(dpu.Name),
+		}, joinSecret)).To(Succeed())
+		payload := string(joinSecret.Data["join"])
+		Expect(payload).To(HavePrefix("#!/usr/bin/env bash"))
+		Expect(payload).To(ContainSubstring("JOIN_TOKEN='a-worker-token'"))
+		Expect(payload).To(ContainSubstring("K0S_VERSION='v1.35.6+k0s.0'"))
+		Expect(payload).To(ContainSubstring("install worker"))
+		Expect(payload).To(ContainSubstring("--profile \"$K0S_PROFILE\""))
+		Expect(payload).NotTo(ContainSubstring("kubeadm join"))
+
+		By("the JoinTokenRequest was minted for this DPU")
+		request := &k0smotronv1.JoinTokenRequest{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Namespace: testNS.Name,
+			Name:      dutil.K0smotronJoinTokenRequestName(dpu),
+		}, request)).To(Succeed())
+		Expect(request.Spec.ClusterName).To(Equal(defaultClusterName))
+		Expect(request.Spec.Role).To(Equal("worker"))
 	})
 
 	Describe("BlueField 4 ISO path", func() {

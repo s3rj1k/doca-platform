@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+# Rendered for DPU {{ .DPUNamespace }}/{{ .DPUName }} and run by the DPU agent as bash.
+# The agent retries the whole script, so every step has to be idempotent.
+set -euo pipefail
+
+JOIN_TOKEN='{{ .JoinToken }}'
+NODE_NAME='{{ .NodeName }}'
+K0S_VERSION='{{ .K0sVersion }}'
+K0S_INSTALL_PATH='{{ .K0sInstallPath }}'
+K0S_PROFILE='{{ .K0sProfile }}'
+
+K0S_BIN="${K0S_INSTALL_PATH}/k0s"
+TOKEN_FILE=/etc/k0s/join.token
+
+# Downloaded once, so a retry is a no operation. The version matches the control plane
+# k0smotron reported, which keeps the worker inside the kubelet skew policy.
+if [ ! -x "$K0S_BIN" ]; then
+  curl -sSfL --retry 5 https://get.k0s.sh \
+    | K0S_INSTALL_PATH="$K0S_INSTALL_PATH" K0S_VERSION="$K0S_VERSION" sh
+fi
+
+# The token minted for this DPU, readable only by root.
+install -d -m 0700 "$(dirname "$TOKEN_FILE")"
+( umask 077; printf '%s' "$JOIN_TOKEN" > "$TOKEN_FILE" )
+
+# The node name has to match the DPU object, otherwise DPF never finds the Node. The
+# profile carries the kubelet settings a DPU needs and the control plane has to define it.
+if [ ! -e /etc/systemd/system/k0sworker.service ]; then
+  "$K0S_BIN" install worker \
+    --token-file "$TOKEN_FILE" \
+    --profile "$K0S_PROFILE" \
+    --kubelet-extra-args="--hostname-override=$NODE_NAME"
+  systemctl daemon-reload
+fi
+
+"$K0S_BIN" start || systemctl restart k0sworker
+
+# A worker holds no admin credentials, so the kubelet kubeconfig appearing is the only
+# local signal that the join took. Exiting 0 without it would report a join that never was.
+for _ in $(seq 60); do
+  [ -f /var/lib/k0s/kubelet.conf ] && exit 0
+  sleep 5
+done
+
+echo "k0s worker did not obtain kubelet credentials before the deadline" >&2
+exit 1

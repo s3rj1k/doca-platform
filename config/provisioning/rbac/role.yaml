@@ -132,6 +132,21 @@ rules:
   verbs:
   - approve
 - apiGroups:
+  - k0smotron.io
+  resources:
+  - clusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - k0smotron.io
+  resources:
+  - jointokenrequests
+  verbs:
+  - create
+  - delete
+- apiGroups:
   - maintenance.nvidia.com
   resources:
   - nodemaintenances

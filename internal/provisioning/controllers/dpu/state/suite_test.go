@@ -27,6 +27,7 @@ import (
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
+	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
 
 	nvidiaNodeMaintenancev1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
@@ -70,6 +71,7 @@ var _ = BeforeSuite(func() {
 			filepath.Join("..", "..", "..", "..", "..", "deploy", "charts", "dpf-operator", "templates", "crds"),
 			filepath.Join("..", "..", "..", "..", "..", "test", "objects", "crd", "cert-manager"),
 			filepath.Join("..", "..", "..", "..", "..", "test", "objects", "crd", "nodemaintenances"),
+			filepath.Join("..", "..", "..", "..", "..", "test", "objects", "crd", "k0smotron"),
 		},
 		ErrorIfCRDPathMissing: true,
 
@@ -94,6 +96,8 @@ var _ = BeforeSuite(func() {
 	err = operatorv1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = nvidiaNodeMaintenancev1.AddToScheme(scheme)
+	Expect(err).NotTo(HaveOccurred())
+	err = k0smotronv1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	ctx, cancel = context.WithCancel(context.TODO())

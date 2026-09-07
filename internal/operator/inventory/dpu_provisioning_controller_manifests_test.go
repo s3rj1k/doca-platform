@@ -19,6 +19,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1175,4 +1176,39 @@ func TestDPFProvisioningControllerObjects_setNodeEffectRemovalTimeout(t *testing
 		deployment := findDeployment(t, vars)
 		g.Expect(deployment.Spec.Template.Spec.Containers[0].Args).To(ContainElement("--node-effect-removal-timeout=30m0s"))
 	})
+}
+
+// TestProvisioningControllerK0smotronRBAC pins the rules the k0smotron join path needs. Nothing
+// else can catch a missing one, since every test client is either fake or cluster admin.
+func TestProvisioningControllerK0smotronRBAC(t *testing.T) {
+	g := NewWithT(t)
+
+	objs, err := utils.BytesToUnstructured(provisioningControllerData)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	granted := map[string][]string{}
+	for _, obj := range objs {
+		if obj.GetKind() != "ClusterRole" {
+			continue
+		}
+		role := &v1.ClusterRole{}
+		g.Expect(runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), role)).To(Succeed())
+		for _, rule := range role.Rules {
+			if !slices.Contains(rule.APIGroups, "k0smotron.io") {
+				continue
+			}
+			for _, resource := range rule.Resources {
+				granted[resource] = append(granted[resource], rule.Verbs...)
+			}
+		}
+	}
+
+	// The Cluster read goes through the manager cache, so get alone is not enough.
+	g.Expect(granted).To(HaveKey("clusters"))
+	g.Expect(granted["clusters"]).To(ContainElements("get", "list", "watch"))
+
+	// A missing verb here fails the join with a 403, and on delete it strands the DPU on its
+	// finalizer, because DeleteK0smotronJoinToken tolerates only NotFound and NoMatch.
+	g.Expect(granted).To(HaveKey("jointokenrequests"))
+	g.Expect(granted["jointokenrequests"]).To(ContainElements("create", "delete"))
 }

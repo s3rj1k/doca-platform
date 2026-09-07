@@ -224,17 +224,17 @@ func PrepareBFB(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Con
 			Name:      kubeadmSecretName,
 			Namespace: dpu.Namespace,
 		},
-		Data: map[string][]byte{
+	}
+	// Reconciled rather than created once. The agent runs this payload as root, so leaving a
+	// Secret that happens to already carry the name unexamined would run whatever it holds.
+	if _, err := controllerutil.CreateOrUpdate(ctx, ctrlCtx.Client, kubeadmSecret, func() error {
+		kubeadmSecret.Data = map[string][]byte{
 			"join": []byte(joinCommand),
-		},
-	}
-	if err := controllerutil.SetOwnerReference(dpu, kubeadmSecret, ctrlCtx.Client.Scheme()); err != nil {
-		err = fmt.Errorf("failed to set owner reference on kubeadm join secret: %w", err)
-		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondBFBPrepared.String(), err, "FailedToCreateKubeadmSecret", err.Error()))
-		return *state, err
-	}
-	if err := ctrlCtx.Client.Create(ctx, kubeadmSecret); err != nil && !apierrors.IsAlreadyExists(err) {
-		err = fmt.Errorf("failed to create kubeadm join secret: %w", err)
+		}
+
+		return controllerutil.SetOwnerReference(dpu, kubeadmSecret, ctrlCtx.Client.Scheme())
+	}); err != nil {
+		err = fmt.Errorf("failed to reconcile kubeadm join secret: %w", err)
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondBFBPrepared.String(), err, "FailedToCreateKubeadmSecret", err.Error()))
 		return *state, err
 	}
