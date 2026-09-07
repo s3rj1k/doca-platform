@@ -601,6 +601,10 @@ NFD_WAIT ?= true
 # can be deployed and run directly through the documented Makefile workflow.
 # HELMFILE_STATE_VALUES_SET remains a full override for other test configurations.
 TEST_DEPLOY_OPERATOR_HELMFILE_STATE_VALUES_SET = $(if $(HELMFILE_STATE_VALUES_SET),$(HELMFILE_STATE_VALUES_SET),openbao.enabled=true,external-secrets.enabled=true)
+# Optional k0smotron, installed after the prereqs helmfile. Invoked here rather than as a
+# helmfile hook, because helmfile skips unchanged releases so a hook there would not run.
+export K0SMOTRON_ENABLED ?= false
+K0SMOTRON_VERSION ?= v2.1.0
 .PHONY: test-deploy-operator-helm
 test-deploy-operator-helm: helm helm-package-operator ## Deploy the DPF Operator using helm
 	# Deploy the DPF Operator prerequisites.
@@ -613,6 +617,9 @@ ifeq ($(NFD_WAIT),false)
 else
 	$(MAKE) HELMFILE_FILE=$(CURDIR)/deploy/helmfiles/prereqs.yaml.tmp HELMFILE_STATE_VALUES_SET="$(TEST_DEPLOY_OPERATOR_HELMFILE_STATE_VALUES_SET)" test-deploy-helmfile
 endif
+
+	# Install k0smotron, which the k0smotron cluster manager needs. A no-op unless opted into.
+	cd $(CURDIR)/deploy/helmfiles && ./hooks/apply-k0smotron.sh $(K0SMOTRON_VERSION)
 
 	# Deploy the DPF Operator.
 	$(HELM) upgrade --install --create-namespace --namespace $(OPERATOR_NAMESPACE) \
