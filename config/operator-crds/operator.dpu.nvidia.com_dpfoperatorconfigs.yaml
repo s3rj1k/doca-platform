@@ -503,6 +503,92 @@ spec:
                 items:
                   type: string
                 type: array
+              k0smotronClusterManager:
+                description: K0smotronClusterManager is the configuration for the
+                  k0smotron-cluster-manager
+                properties:
+                  controller:
+                    description: |-
+                      Controller contains the configuration for the k0smotron Cluster Manager controller
+                      component. It contains the image for the controller and its resource requirements.
+                    properties:
+                      image:
+                        description: Image is a reference to a container image.
+                        pattern: ^((?:(?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))*|\[(?:[a-fA-F0-9:]+)\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)*)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$
+                        type: string
+                      resources:
+                        description: |-
+                          Resources defines the memory and CPU resource requests and limits for the component.
+                          This field is optional, and if not set, the component will use the default resource.
+                        properties:
+                          limits:
+                            description: Limits defines the resource limits for the
+                              component.
+                            properties:
+                              cpu:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: CPU is the amount of CPU requested by
+                                  the component.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              memory:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: Memory is the amount of Memory requested
+                                  by the component.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            type: object
+                          requests:
+                            description: Requests defines the resource requests for
+                              the component.
+                            properties:
+                              cpu:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: CPU is the amount of CPU requested by
+                                  the component.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              memory:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: Memory is the amount of Memory requested
+                                  by the component.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            type: object
+                        type: object
+                    type: object
+                  disable:
+                    description: Disable ensures the component is not deployed when
+                      set to true.
+                    type: boolean
+                  etcdStorageClassName:
+                    description: |-
+                      EtcdStorageClassName backs each hosted control plane's etcd volume, applied when that
+                      control plane is first created. Empty uses the cluster default, if the cluster has one.
+                    type: string
+                  k0sVersion:
+                    description: |-
+                      K0sVersion is the k0s version hosted control planes run, and the version their workers
+                      download to match. Empty leaves the manager on the version this build ships.
+                    type: string
+                  replicas:
+                    default: 2
+                    description: |-
+                      Replicas is the number of replicas for the controller deployment.
+                      Used for High Availability via leader election.
+                    format: int32
+                    maximum: 3
+                    minimum: 1
+                    type: integer
+                type: object
               kamajiClusterManager:
                 description: KamajiClusterManager is the configuration for the kamaji-cluster-manager
                 properties:

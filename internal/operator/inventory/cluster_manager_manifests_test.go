@@ -28,8 +28,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestClusterManagerObjects_ComparisonTable(t *testing.T) {
@@ -58,6 +61,13 @@ func TestClusterManagerObjects_ComparisonTable(t *testing.T) {
 			expectCommonEdits:        true,
 			clusterManagerObjectName: operatorv1.StaticClusterManagerName.String(),
 		},
+		{
+			name:                     "k0smotron has NO keepalived flag but has common edits",
+			clusterManager:           newK0smotronClusterManagerObjects(k0smotronCMData),
+			expectKeepalivedFlag:     false,
+			expectCommonEdits:        true,
+			clusterManagerObjectName: operatorv1.K0smotronClusterManagerName.String(),
+		},
 	}
 
 	for _, tc := range tests {
@@ -67,10 +77,10 @@ func TestClusterManagerObjects_ComparisonTable(t *testing.T) {
 
 			testNS := testNamespace
 			vars := newDefaultVariables(defaults)
-			// Static cluster manager is disabled by default, so we need to enable it for the test
-			if tc.clusterManagerObjectName == operatorv1.StaticClusterManagerName.String() {
-				vars.DisableSystemComponents[operatorv1.StaticClusterManagerName] = false
-			}
+			// The static and k0smotron cluster managers are disabled by default, so they
+			// have to be enabled for the test.
+			vars.DisableSystemComponents[operatorv1.StaticClusterManagerName] = false
+			vars.DisableSystemComponents[operatorv1.K0smotronClusterManagerName] = false
 			vars.Namespace = testNS
 
 			objs, err := tc.clusterManager.GenerateManifests(context.Background(), vars)
@@ -113,6 +123,193 @@ func TestClusterManagerObjects_ComparisonTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deploymentFromObjects returns the single Deployment a cluster manager generates.
+func deploymentFromObjects(g Gomega, objs []client.Object) *appsv1.Deployment {
+	for _, obj := range objs {
+		if obj.GetObjectKind().GroupVersionKind().Kind != string(DeploymentKind) {
+			continue
+		}
+		unstructuredObj, ok := obj.(*unstructured.Unstructured)
+		g.Expect(ok).To(BeTrue())
+		deploy := &appsv1.Deployment{}
+		g.Expect(runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredObj.UnstructuredContent(), deploy)).To(Succeed())
+
+		return deploy
+	}
+
+	return nil
+}
+
+func TestK0smotronClusterManagerObjects_Flags(t *testing.T) {
+	g := NewWithT(t)
+	defaults := &release.Defaults{}
+	g.Expect(defaults.Parse()).To(Succeed())
+
+	generate := func(g Gomega, k0sVersion, etcdStorageClass string) *appsv1.Deployment {
+		cm := newK0smotronClusterManagerObjects(k0smotronCMData)
+		g.Expect(cm.Parse()).NotTo(HaveOccurred())
+
+		vars := newDefaultVariables(defaults)
+		vars.DisableSystemComponents[operatorv1.K0smotronClusterManagerName] = false
+		vars.K0sVersion = k0sVersion
+		vars.EtcdStorageClassName = etcdStorageClass
+
+		objs, err := cm.GenerateManifests(context.Background(), vars)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		return deploymentFromObjects(g, objs)
+	}
+
+	args := func(g Gomega, deployment *appsv1.Deployment) []string {
+		g.Expect(deployment).NotTo(BeNil())
+
+		return deployment.Spec.Template.Spec.Containers[0].Args
+	}
+
+	t.Run("passes both pinned settings to the manager", func(t *testing.T) {
+		g := NewWithT(t)
+		got := args(g, generate(g, "v1.35.6+k0s.0", "local-path"))
+		g.Expect(got).To(ContainElement("--k0s-version=v1.35.6+k0s.0"))
+		g.Expect(got).To(ContainElement("--etcd-storage-class=local-path"))
+	})
+
+	t.Run("passes only the setting that is pinned", func(t *testing.T) {
+		g := NewWithT(t)
+		got := args(g, generate(g, "", "local-path"))
+		g.Expect(got).To(ContainElement("--etcd-storage-class=local-path"))
+		for _, arg := range got {
+			g.Expect(arg).NotTo(HavePrefix("--k0s-version="))
+		}
+	})
+
+	t.Run("leaves the manager on its own defaults when nothing is pinned", func(t *testing.T) {
+		g := NewWithT(t)
+		// An empty flag is worse than none, since it would override the manager's default.
+		for _, arg := range args(g, generate(g, "", "")) {
+			g.Expect(arg).NotTo(HavePrefix("--k0s-version="))
+			g.Expect(arg).NotTo(HavePrefix("--etcd-storage-class="))
+		}
+	})
+
+	t.Run("generates nothing while the component is disabled", func(t *testing.T) {
+		g := NewWithT(t)
+		cm := newK0smotronClusterManagerObjects(k0smotronCMData)
+		g.Expect(cm.Parse()).NotTo(HaveOccurred())
+
+		// Disabled by default, so an operator that never asks for k0smotron does not get it.
+		vars := newDefaultVariables(defaults)
+		g.Expect(vars.DisableSystemComponents).To(HaveKeyWithValue(operatorv1.K0smotronClusterManagerName, true))
+
+		objs, err := cm.GenerateManifests(context.Background(), vars)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(objs).To(BeEmpty())
+	})
+}
+
+// k0smotronTestConfig returns a config carrying only what VariablesFromDPFOperatorConfig
+// dereferences, plus the k0smotron manager under test.
+func k0smotronTestConfig(cm *operatorv1.K0smotronClusterManagerConfiguration) *operatorv1.DPFOperatorConfig {
+	return &operatorv1.DPFOperatorConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "dpfoperatorconfig", Namespace: testNamespace},
+		Spec: operatorv1.DPFOperatorConfigSpec{
+			DeploymentMode:          operatorv1.DeploymentModeHostTrusted,
+			ProvisioningController:  &operatorv1.ProvisioningControllerConfiguration{},
+			K0smotronClusterManager: cm,
+		},
+	}
+}
+
+func TestVariablesFromDPFOperatorConfig_K0smotron(t *testing.T) {
+	g := NewWithT(t)
+	defaults := &release.Defaults{}
+	g.Expect(defaults.Parse()).To(Succeed())
+
+	t.Run("stays untouched when the config says nothing about k0smotron", func(t *testing.T) {
+		g := NewWithT(t)
+		vars := VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(nil), nil)
+		g.Expect(vars.K0sVersion).To(BeEmpty())
+		g.Expect(vars.EtcdStorageClassName).To(BeEmpty())
+		g.Expect(vars.Replicas).NotTo(HaveKey(operatorv1.K0smotronClusterManagerName))
+		g.Expect(vars.DisableSystemComponents).To(HaveKeyWithValue(operatorv1.K0smotronClusterManagerName, true))
+	})
+
+	t.Run("carries the k0s version and replicas across", func(t *testing.T) {
+		g := NewWithT(t)
+		vars := VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(
+			&operatorv1.K0smotronClusterManagerConfiguration{
+				BaseComponentConfig:  operatorv1.BaseComponentConfig{Disable: ptr.To(false)},
+				BaseControllerConfig: operatorv1.BaseControllerConfig{Replicas: ptr.To[int32](2)},
+				K0sVersion:           "v1.35.6+k0s.0",
+				EtcdStorageClassName: "local-path",
+			}), nil)
+		g.Expect(vars.K0sVersion).To(Equal("v1.35.6+k0s.0"))
+		g.Expect(vars.EtcdStorageClassName).To(Equal("local-path"))
+		g.Expect(vars.Replicas).To(HaveKeyWithValue(operatorv1.K0smotronClusterManagerName, ptr.To[int32](2)))
+		g.Expect(vars.DisableSystemComponents).To(HaveKeyWithValue(operatorv1.K0smotronClusterManagerName, false))
+	})
+
+	t.Run("enables the component without pinning a version", func(t *testing.T) {
+		g := NewWithT(t)
+		vars := VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(
+			&operatorv1.K0smotronClusterManagerConfiguration{
+				BaseComponentConfig: operatorv1.BaseComponentConfig{Disable: ptr.To(false)},
+			}), nil)
+		g.Expect(vars.K0sVersion).To(BeEmpty())
+		g.Expect(vars.DisableSystemComponents).To(HaveKeyWithValue(operatorv1.K0smotronClusterManagerName, false))
+	})
+
+	t.Run("takes the image and resources the config overrides", func(t *testing.T) {
+		g := NewWithT(t)
+		vars := VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(
+			&operatorv1.K0smotronClusterManagerConfiguration{
+				BaseComponentConfig: operatorv1.BaseComponentConfig{Disable: ptr.To(false)},
+				Controller: &operatorv1.DefaultOverridesConfiguration{
+					ImageComponentConfig: operatorv1.ImageComponentConfig{
+						Image: ptr.To("example.com/k0smotron-cluster-manager:v1"),
+					},
+				},
+			}), nil)
+		image := operatorv1.K0smotronClusterManagerName.WithContainer(operatorv1.ControllerManagerContainer)
+		g.Expect(vars.Images).To(HaveKeyWithValue(image, "example.com/k0smotron-cluster-manager:v1"))
+	})
+}
+
+// TestK0smotronClusterManagerIsReachableFromItsConfig guards the registration in
+// DPFOperatorConfig.ComponentConfigs, without which the manager can never be deployed.
+func TestK0smotronClusterManagerIsReachableFromItsConfig(t *testing.T) {
+	g := NewWithT(t)
+	defaults := &release.Defaults{}
+	g.Expect(defaults.Parse()).To(Succeed())
+
+	inv := New()
+	g.Expect(inv.ParseAll()).To(Succeed())
+
+	enabled := func(vars Variables) bool {
+		for _, component := range inv.EnabledComponents(vars) {
+			if component.Name() == operatorv1.K0smotronClusterManagerName {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	g.Expect(enabled(VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(nil), nil))).To(BeFalse(),
+		"k0smotron should stay off for a config that does not ask for it")
+
+	g.Expect(enabled(VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(
+		&operatorv1.K0smotronClusterManagerConfiguration{
+			BaseComponentConfig: operatorv1.BaseComponentConfig{Disable: ptr.To(false)},
+		}), nil))).To(BeTrue(),
+		"k0smotron should be deployed once the config enables it")
+
+	g.Expect(enabled(VariablesFromDPFOperatorConfig(defaults, k0smotronTestConfig(
+		&operatorv1.K0smotronClusterManagerConfiguration{
+			BaseComponentConfig: operatorv1.BaseComponentConfig{Disable: ptr.To(true)},
+		}), nil))).To(BeFalse(),
+		"k0smotron should stay off when the config disables it")
 }
 
 func TestClusterManagerObjects_ResourcesAndReplicas(t *testing.T) {

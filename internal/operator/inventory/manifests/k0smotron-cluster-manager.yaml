@@ -1,0 +1,245 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: k0smotron-cluster-manager
+    dpu.nvidia.com/component: k0smotron-cluster-manager
+  name: k0smotron-cm-controller-manager
+  namespace: dpf-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/part-of: k0smotron-cluster-manager
+    dpu.nvidia.com/component: k0smotron-cluster-manager
+  name: k0smotron-cm-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - k0smotron.io
+  resources:
+  - clusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - operator.dpu.nvidia.com
+  resources:
+  - dpfoperatorconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - provisioning.dpu.nvidia.com
+  resources:
+  - dpuclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - provisioning.dpu.nvidia.com
+  resources:
+  - dpuclusters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - provisioning.dpu.nvidia.com
+  resources:
+  - dpuclusters/status
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: k0smotron-cluster-manager
+    dpu.nvidia.com/component: k0smotron-cluster-manager
+  name: k0smotron-cm-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k0smotron-cm-manager-role
+subjects:
+- kind: ServiceAccount
+  name: k0smotron-cm-controller-manager
+  namespace: dpf-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: k0smotron-cluster-manager
+    dpu.nvidia.com/component: k0smotron-cluster-manager
+  name: k0smotron-cm-leader-election-role
+  namespace: dpf-operator-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: k0smotron-cluster-manager
+    dpu.nvidia.com/component: k0smotron-cluster-manager
+  name: k0smotron-cm-leader-election-rolebinding
+  namespace: dpf-operator-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k0smotron-cm-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: k0smotron-cm-controller-manager
+  namespace: dpf-operator-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: manager
+    app.kubernetes.io/part-of: k0smotron-cluster-manager
+    dpu.nvidia.com/component: k0smotron-cluster-manager
+  name: k0smotron-cm-controller-manager
+  namespace: dpf-operator-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: k0smotron-cluster-manager
+      dpu.nvidia.com/component: k0smotron-cluster-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/part-of: k0smotron-cluster-manager
+        dpu.nvidia.com/component: k0smotron-cluster-manager
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/part-of: k0smotron-cluster-manager
+                  dpu.nvidia.com/component: k0smotron-cluster-manager
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - --leader-elect
+        command:
+        - /k0smotron-cluster-manager
+        image: example.com/dpf-system:v0.1.0
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          name: kube-api-access
+          readOnly: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      serviceAccountName: k0smotron-cm-controller-manager
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - name: kube-api-access
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              path: token
+          - configMap:
+              items:
+              - key: ca.crt
+                path: ca.crt
+              name: kube-root-ca.crt
+          - downwardAPI:
+              items:
+              - fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+                path: namespace

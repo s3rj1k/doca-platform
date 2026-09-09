@@ -300,6 +300,9 @@ type DPFOperatorConfigSpec struct {
 	// StaticClusterManager is the configuration for the static-cluster-manager
 	// +optional
 	StaticClusterManager *StaticClusterManagerConfiguration `json:"staticClusterManager,omitempty"`
+	// K0smotronClusterManager is the configuration for the k0smotron-cluster-manager
+	// +optional
+	K0smotronClusterManager *K0smotronClusterManagerConfiguration `json:"k0smotronClusterManager,omitempty"`
 	// NodeSRIOVDevicePluginController is the configuration for the NodeSRIOVDevicePlugin controller.
 	// This controller manages per-node SRIOV device plugin pods based on DPU configurations.
 	// The controller is disabled by default.

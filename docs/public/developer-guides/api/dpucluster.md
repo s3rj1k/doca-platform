@@ -109,6 +109,96 @@ spec:
         node-role.kubernetes.io/control-plane: ""
 ```
 
+#### Using the k0smotron Cluster Manager
+
+k0smotron hosts the control plane as pods in the management cluster, like Kamaji does, but runs
+k0s rather than upstream Kubernetes. It is not installed by DPF, so install it first, then enable
+the manager, which is off by default:
+
+```yaml
+apiVersion: operator.dpu.nvidia.com/v1alpha1
+kind: DPFOperatorConfig
+metadata:
+  name: dpfoperatorconfig
+  namespace: dpf-operator-system
+spec:
+  k0smotronClusterManager:
+    disable: false
+    ## Backs each hosted control plane's etcd volume. Only needed where the management cluster
+    ## has no default StorageClass, otherwise the etcd PVC never binds.
+    etcdStorageClassName: local-path
+```
+
+The chart also needs telling, for the same reason the static manager does:
+
+```shell
+helm upgrade --install -n dpf-operator-system dpf-operator dpf-repository/dpf-operator \
+  --set clusterManager=k0smotron.io/k0smotron
+```
+
+The DPUCluster will look like:
+
+```yaml
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUCluster
+metadata:
+  name: dpu-cluster-1
+  namespace: dpf-operator-system
+spec:
+  type: k0smotron.io/k0smotron
+  maxNodes: 1000
+  ## No clusterEndpoint. k0smotron exposes the control plane through a NodePort Service of its
+  ## own, so keepalived is not involved and the field is ignored for this type.
+```
+
+##### Configuring the hosted control plane
+
+`.spec.clusterManagerConfig` is a partial [k0smotron
+ClusterSpec](https://docs.k0smotron.io/stable/resource-reference/) merged over the one the cluster
+manager builds. Every field k0smotron accepts can be set this way, including ones DPF sets itself:
+
+```yaml
+spec:
+  type: k0smotron.io/k0smotron
+  clusterManagerConfig:
+    replicas: 1
+    controlPlaneFlags:
+      - --enable-metrics-scraper=true
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    ## Node ports are cluster scoped, so a second k0smotron DPUCluster in the same management
+    ## cluster has to move them or its Service will fail to allocate.
+    service:
+      type: NodePort
+      apiPort: 31443
+      konnectivityPort: 31132
+```
+
+Three things are worth knowing before using it:
+
+* **Arrays replace, they do not join.** Setting `patches` or `k0sConfig` discards what DPF put
+  there rather than adding to it.
+* **An unknown field is an error**, reported on the DPUCluster rather than ignored, so a typo
+  does not look like a setting that quietly did nothing.
+* **`storage` and `persistence` apply only when the control plane is first created.** A bound
+  PVC's class and size cannot change, so an edit to either is reported on the DPUCluster as a
+  `K0smotronSpecApplied` condition instead of being retried forever.
+
+The manager refuses a configuration no DPU could join, reporting `K0smotronSpecApplied` with
+reason `InvalidClusterManagerConfig`. It requires a non-empty `version`, a `service.type` of
+`NodePort` or `LoadBalancer`, a `dpu` entry in `k0sConfig.spec.workerProfiles` (the profile the
+join script names), and a non-zero etcd volume size.
+
+`K0smotronSpecApplied` is reported on every pass, so it reads `True` with reason `Applied` once
+the control plane carries what was asked for:
+
+```shell
+kubectl get dpucluster dpu-cluster-1 -n dpf-operator-system \
+  -o jsonpath='{.status.conditions[?(@.type=="K0smotronSpecApplied")]}'
+```
+
 ### Multiple DPUClusters
 
 DPF supports running multiple DPUClusters simultaneously within a single management cluster. Each DPUCluster is an

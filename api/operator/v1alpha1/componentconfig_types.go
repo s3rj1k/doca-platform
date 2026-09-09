@@ -630,6 +630,50 @@ func (c *StaticClusterManagerConfiguration) GetResources() map[ContainerName]*co
 	}
 }
 
+// K0smotronClusterManagerConfiguration configures the manager that hosts DPU control planes
+// with k0smotron. It carries no deprecated image field, unlike the managers that predate it.
+type K0smotronClusterManagerConfiguration struct {
+	BaseComponentConfig  `json:",inline"`
+	BaseControllerConfig `json:",inline"`
+
+	// Controller contains the configuration for the k0smotron Cluster Manager controller
+	// component. It contains the image for the controller and its resource requirements.
+	// +optional
+	Controller *DefaultOverridesConfiguration `json:"controller,omitempty"`
+
+	// K0sVersion is the k0s version hosted control planes run, and the version their workers
+	// download to match. Empty leaves the manager on the version this build ships.
+	// +optional
+	K0sVersion string `json:"k0sVersion,omitempty"`
+
+	// EtcdStorageClassName backs each hosted control plane's etcd volume, applied when that
+	// control plane is first created. Empty uses the cluster default, if the cluster has one.
+	// +optional
+	EtcdStorageClassName string `json:"etcdStorageClassName,omitempty"`
+}
+
+func (c *K0smotronClusterManagerConfiguration) Name() string {
+	return K0smotronClusterManagerName.String()
+}
+
+// GetImages returns a map of container names to their images
+func (c *K0smotronClusterManagerConfiguration) GetImages() map[ContainerName]*string {
+	images := make(map[ContainerName]*string)
+	if c.Controller != nil {
+		images[ControllerManagerContainer] = c.Controller.GetImage()
+	}
+	return images
+}
+
+func (c *K0smotronClusterManagerConfiguration) GetResources() map[ContainerName]*corev1.ResourceRequirements {
+	if c.Controller == nil {
+		return nil
+	}
+	return map[ContainerName]*corev1.ResourceRequirements{
+		ControllerManagerContainer: c.Controller.GetResource(),
+	}
+}
+
 // +kubebuilder:validation:XValidation:rule="!has(self.image) || !has(self.controller) || !has(self.controller.image)",message="only either 'image' (deprecated) or 'controller.image' can be set, but not both"
 
 type ServiceSetControllerConfiguration struct {

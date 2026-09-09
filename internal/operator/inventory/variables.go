@@ -66,6 +66,8 @@ func newDefaultVariables(defaults *release.Defaults) Variables {
 
 			// Static cluster manager is disabled by default.
 			operatorv1.StaticClusterManagerName: true,
+			// k0smotron cluster manager is disabled by default.
+			operatorv1.K0smotronClusterManagerName: true,
 			// NodeSRIOVDevicePluginController is disabled by default.
 			operatorv1.NodeSRIOVDevicePluginControllerName: true,
 			// KataContainers is disabled by default (opt-in).
@@ -85,6 +87,7 @@ func newDefaultVariables(defaults *release.Defaults) Variables {
 			operatorv1.ProvisioningControllerName.WithContainer(operatorv1.ControllerManagerContainer):          defaults.DPFSystemImage,
 			operatorv1.DPUServiceControllerName.WithContainer(operatorv1.ControllerManagerContainer):            defaults.DPFSystemImage,
 			operatorv1.StaticClusterManagerName.WithContainer(operatorv1.ControllerManagerContainer):            defaults.DPFSystemImage,
+			operatorv1.K0smotronClusterManagerName.WithContainer(operatorv1.ControllerManagerContainer):         defaults.DPFSystemImage,
 			operatorv1.KamajiClusterManagerName.WithContainer(operatorv1.ControllerManagerContainer):            defaults.DPFSystemImage,
 			operatorv1.ServiceSetControllerName.WithContainer(operatorv1.ControllerManagerContainer):            defaults.DPFSystemImage,
 			operatorv1.SFCControllerName.WithContainer(operatorv1.ControllerManagerContainer):                   defaults.DPFSystemImage,
@@ -166,6 +169,11 @@ type Variables struct {
 	ArgoCDNamespace                        string
 	VaultKMS                               *operatorv1.VaultKMSConfiguration
 	SpiffeEnabled                          bool
+	// K0sVersion pins the k0s version the k0smotron manager gives hosted control planes.
+	K0sVersion string
+
+	// EtcdStorageClassName pins the class backing each hosted control plane's etcd volume.
+	EtcdStorageClassName string
 }
 
 type DPFProvisioningVariables struct {
@@ -448,6 +456,7 @@ func setAdditionalConfigs(variables Variables, config *operatorv1.DPFOperatorCon
 	if config.Spec.StaticClusterManager != nil && config.Spec.StaticClusterManager.Replicas != nil {
 		variables.Replicas[operatorv1.StaticClusterManagerName] = config.Spec.StaticClusterManager.Replicas
 	}
+	setK0smotronConfig(&variables, config)
 	if config.Spec.ServiceSetController != nil && config.Spec.ServiceSetController.Replicas != nil {
 		variables.Replicas[operatorv1.ServiceSetControllerName] = config.Spec.ServiceSetController.Replicas
 	}
@@ -539,6 +548,19 @@ func setMonitoringConfigs(variables Variables, config *operatorv1.DPFOperatorCon
 	return variables
 }
 
+// setK0smotronConfig copies the k0smotron manager settings across. It is separate so the
+// caller, which already branches over every component, does not grow another two paths.
+func setK0smotronConfig(variables *Variables, config *operatorv1.DPFOperatorConfig) {
+	if config.Spec.K0smotronClusterManager == nil {
+		return
+	}
+	if config.Spec.K0smotronClusterManager.Replicas != nil {
+		variables.Replicas[operatorv1.K0smotronClusterManagerName] = config.Spec.K0smotronClusterManager.Replicas
+	}
+	variables.K0sVersion = config.Spec.K0smotronClusterManager.K0sVersion
+	variables.EtcdStorageClassName = config.Spec.K0smotronClusterManager.EtcdStorageClassName
+}
+
 // getContainerNameFromComponent returns the container name associated with the given component configuration.
 // This is used for components that have a single container and use the deprecated single image configuration.
 // TODO: Remove this function after the deprecated single image config is removed.
@@ -550,7 +572,8 @@ func getContainerNameFromComponent(componentName operatorv1.ComponentName) opera
 		operatorv1.SFCControllerName,
 		operatorv1.ServiceSetControllerName,
 		operatorv1.KamajiClusterManagerName,
-		operatorv1.StaticClusterManagerName:
+		operatorv1.StaticClusterManagerName,
+		operatorv1.K0smotronClusterManagerName:
 		return operatorv1.ControllerManagerContainer
 	case operatorv1.DPUDetectorName:
 		return operatorv1.DPUDetectorContainer

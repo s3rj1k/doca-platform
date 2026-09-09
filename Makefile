@@ -333,13 +333,14 @@ generate-manifests-release-defaults: envsubst ## Generates manifests that contai
 TEMPLATES_DIR ?= $(PROJECT_DIR)/internal/operator/inventory/templates
 EMBEDDED_MANIFESTS_DIR ?= $(PROJECT_DIR)/internal/operator/inventory/manifests
 .PHONY: generate-manifests-operator-embedded
-generate-manifests-operator-embedded: kustomize envsubst generate-manifests-dpuservice generate-manifests-provisioning generate-manifests-hostagent generate-manifests-release-defaults generate-manifests-kamaji-cluster-manager generate-manifests-static-cluster-manager generate-manifests-nodesriovdeviceplugin ## Generates manifests that are embedded into the operator binary.
+generate-manifests-operator-embedded: kustomize envsubst generate-manifests-dpuservice generate-manifests-provisioning generate-manifests-hostagent generate-manifests-release-defaults generate-manifests-kamaji-cluster-manager generate-manifests-static-cluster-manager generate-manifests-k0smotron-cluster-manager generate-manifests-nodesriovdeviceplugin ## Generates manifests that are embedded into the operator binary.
 	# Reorder none here ensure that we generate the kustomize files in a specific order to be consumed by the DPF Operator.
 	$(KUSTOMIZE) build --reorder=none config/provisioning/default > $(EMBEDDED_MANIFESTS_DIR)/provisioning-controller.yaml
 	$(KUSTOMIZE) build --reorder=none config/dpu-detector > $(EMBEDDED_MANIFESTS_DIR)/dpu-detector.yaml
 	$(KUSTOMIZE) build --reorder=none config/dpuservice/default > $(EMBEDDED_MANIFESTS_DIR)/dpuservice-controller.yaml
 	$(KUSTOMIZE) build --reorder=none config/kamaji-cluster-manager/default > $(EMBEDDED_MANIFESTS_DIR)/kamaji-cluster-manager.yaml
 	$(KUSTOMIZE) build --reorder=none config/static-cluster-manager/default > $(EMBEDDED_MANIFESTS_DIR)/static-cluster-manager.yaml
+	$(KUSTOMIZE) build --reorder=none config/k0smotron-cluster-manager/default > $(EMBEDDED_MANIFESTS_DIR)/k0smotron-cluster-manager.yaml
 	$(KUSTOMIZE) build --reorder=none config/bfb_registry > $(EMBEDDED_MANIFESTS_DIR)/bfb-registry.yaml
 	$(KUSTOMIZE) build --reorder=none config/nodesriovdeviceplugin/default > $(EMBEDDED_MANIFESTS_DIR)/nodesriovdeviceplugin-controller.yaml
 
@@ -392,6 +393,15 @@ generate-manifests-static-cluster-manager: controller-gen kustomize ## Generate 
 	paths="./internal/clustermanager/static/..." \
 	rbac:roleName=manager-role \
 	output:rbac:dir=./config/static-cluster-manager/rbac
+
+.PHONY: generate-manifests-k0smotron-cluster-manager
+generate-manifests-k0smotron-cluster-manager: controller-gen kustomize ## Generate manifests e.g. RBAC. for the k0smotron cluster manager.
+	$(CONTROLLER_GEN) \
+	paths="./cmd/k0smotron-cluster-manager/..." \
+	paths="./internal/clustermanager/controller/..." \
+	paths="./internal/clustermanager/k0smotron/..." \
+	rbac:roleName=manager-role \
+	output:rbac:dir=./config/k0smotron-cluster-manager/rbac
 
 .PHONY: generate-manifests-vpc-crds
 generate-manifests-vpc-crds: controller-gen kustomize ## Generate manifests for VPC (CRDs)

@@ -79,6 +79,52 @@ func newStaticClusterManagerObjects(data []byte) *clusterManagerObjects {
 	return m
 }
 
+// newK0smotronClusterManagerObjects creates k0smotron cluster manager objects, injecting the
+// settings the DPFOperatorConfig pins for every hosted control plane.
+func newK0smotronClusterManagerObjects(data []byte) *clusterManagerObjects {
+	m := newClusterManagerBase(operatorv1.K0smotronClusterManagerName, data)
+	m.edit = func(objs []*unstructured.Unstructured, vars Variables, labelsToAdd map[string]string) error {
+		edits := buildClusterManagerEdits(m.name, vars, labelsToAdd)
+		if flags := k0smotronManagerFlags(vars); len(flags) > 0 {
+			edits = edits.AddForKindS(DeploymentKind, injectK0smotronFlagsEdit(flags))
+		}
+		return edits.Apply(objs)
+	}
+	return m
+}
+
+// k0smotronManagerFlags returns the flags the config pins. An unset value is left off, so the
+// manager keeps its own default rather than being handed an empty one.
+func k0smotronManagerFlags(vars Variables) []string {
+	flags := []string{}
+	if vars.K0sVersion != "" {
+		flags = append(flags, fmt.Sprintf("--k0s-version=%s", vars.K0sVersion))
+	}
+	if vars.EtcdStorageClassName != "" {
+		flags = append(flags, fmt.Sprintf("--etcd-storage-class=%s", vars.EtcdStorageClassName))
+	}
+
+	return flags
+}
+
+// injectK0smotronFlagsEdit passes the pinned settings to the manager, which applies them to
+// every hosted control plane it creates.
+func injectK0smotronFlagsEdit(flags []string) StructuredEdit {
+	return func(obj client.Object) error {
+		deploy, ok := obj.(*appsv1.Deployment)
+		if !ok {
+			return fmt.Errorf("unexpected object type, expected Deployment")
+		}
+
+		c := getManagerContainer(deploy)
+		if c == nil {
+			return fmt.Errorf("container %q not found in deployment", managerContainerName)
+		}
+
+		return setFlags(c, flags...)
+	}
+}
+
 // newKamajiClusterManagerObjects creates Kamaji cluster manager objects with keepalived image injection.
 func newKamajiClusterManagerObjects(data []byte) *clusterManagerObjects {
 	m := newClusterManagerBase(operatorv1.KamajiClusterManagerName, data)

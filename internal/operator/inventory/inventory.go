@@ -92,6 +92,7 @@ type SystemComponents struct {
 	SfcController                   Component
 	KamajiClusterManager            Component
 	StaticClusterManager            Component
+	K0smotronClusterManager         Component
 	DPUDetector                     Component
 	CNIInstaller                    Component
 	NodeSRIOVDevicePluginController Component
@@ -140,6 +141,9 @@ var (
 
 	//go:embed manifests/static-cluster-manager.yaml
 	staticCMData []byte
+
+	//go:embed manifests/k0smotron-cluster-manager.yaml
+	k0smotronCMData []byte
 
 	//go:embed manifests/dpu-detector.yaml
 	dpuDetectorData []byte
@@ -208,8 +212,9 @@ func New() *SystemComponents {
 		DPUDetector: &dpuDetectorObjects{
 			data: dpuDetectorData,
 		},
-		KamajiClusterManager: newKamajiClusterManagerObjects(kamajiCMData),
-		StaticClusterManager: newStaticClusterManagerObjects(staticCMData),
+		KamajiClusterManager:    newKamajiClusterManagerObjects(kamajiCMData),
+		StaticClusterManager:    newStaticClusterManagerObjects(staticCMData),
+		K0smotronClusterManager: newK0smotronClusterManagerObjects(k0smotronCMData),
 		CNIInstaller: &fromDPUService{
 			name: operatorv1.CNIInstallerName,
 			data: cniInstallerData,
@@ -271,6 +276,7 @@ func (s *SystemComponents) AllComponents() []Component {
 	return []Component{
 		s.KamajiClusterManager,
 		s.StaticClusterManager,
+		s.K0smotronClusterManager,
 		s.DPFProvisioning,
 		s.DPUService,
 		s.DPUDetector,

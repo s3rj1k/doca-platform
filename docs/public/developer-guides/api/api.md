@@ -208,6 +208,7 @@ _Appears in:_
 - [DPUDetectorConfiguration](#dpudetectorconfiguration)
 - [DPUServiceControllerConfiguration](#dpuservicecontrollerconfiguration)
 - [FlannelConfiguration](#flannelconfiguration)
+- [K0smotronClusterManagerConfiguration](#k0smotronclustermanagerconfiguration)
 - [KamajiClusterManagerConfiguration](#kamajiclustermanagerconfiguration)
 - [KataContainersConfiguration](#katacontainersconfiguration)
 - [KubeStateMetricsConfiguration](#kubestatemetricsconfiguration)
@@ -240,6 +241,7 @@ by all controller configurations to reduce code duplication.
 
 _Appears in:_
 - [DPUServiceControllerConfiguration](#dpuservicecontrollerconfiguration)
+- [K0smotronClusterManagerConfiguration](#k0smotronclustermanagerconfiguration)
 - [KamajiClusterManagerConfiguration](#kamajiclustermanagerconfiguration)
 - [NVIPAMConfiguration](#nvipamconfiguration)
 - [NodeSRIOVDevicePluginControllerConfiguration](#nodesriovdeviceplugincontrollerconfiguration)
@@ -400,6 +402,7 @@ _Appears in:_
 | `sfcController` _[SFCControllerConfiguration](#sfccontrollerconfiguration)_ | SFCController is the configuration for the SFCController |  | Optional: \{\} <br /> |
 | `kamajiClusterManager` _[KamajiClusterManagerConfiguration](#kamajiclustermanagerconfiguration)_ | KamajiClusterManager is the configuration for the kamaji-cluster-manager |  | Optional: \{\} <br /> |
 | `staticClusterManager` _[StaticClusterManagerConfiguration](#staticclustermanagerconfiguration)_ | StaticClusterManager is the configuration for the static-cluster-manager |  | Optional: \{\} <br /> |
+| `k0smotronClusterManager` _[K0smotronClusterManagerConfiguration](#k0smotronclustermanagerconfiguration)_ | K0smotronClusterManager is the configuration for the k0smotron-cluster-manager |  | Optional: \{\} <br /> |
 | `nodeSRIOVDevicePluginController` _[NodeSRIOVDevicePluginControllerConfiguration](#nodesriovdeviceplugincontrollerconfiguration)_ | NodeSRIOVDevicePluginController is the configuration for the NodeSRIOVDevicePlugin controller.<br />This controller manages per-node SRIOV device plugin pods based on DPU configurations.<br />The controller is disabled by default. |  | Optional: \{\} <br /> |
 
 
@@ -473,6 +476,7 @@ _Appears in:_
 - [CNIInstallerConfiguration](#cniinstallerconfiguration)
 - [DPUDetectorConfiguration](#dpudetectorconfiguration)
 - [DPUServiceControllerConfiguration](#dpuservicecontrollerconfiguration)
+- [K0smotronClusterManagerConfiguration](#k0smotronclustermanagerconfiguration)
 - [KamajiClusterManagerConfiguration](#kamajiclustermanagerconfiguration)
 - [KubeStateMetricsConfiguration](#kubestatemetricsconfiguration)
 - [MultusConfiguration](#multusconfiguration)
@@ -776,6 +780,27 @@ _Appears in:_
 | `bfbRegistry` _[BFBRegistryConfiguration](#bfbregistryconfiguration)_ | BFBRegistry is the configuration for the BFB Registry<br />Deprecated: Use RegistryConfiguration instead. |  | Optional: \{\} <br /> |
 | `skipDPUNodeDiscovery` _boolean_ | SkipDPUNodeDiscovery is a flag to skip the DPU node discovery. | true | Optional: \{\} <br /> |
 | `discoveredDPUDeviceBMCFactoryResetPolicy` _[BMCFactoryResetPolicy](#bmcfactoryresetpolicy)_ | DiscoveredDPUDeviceBMCFactoryResetPolicy is the BMC factory reset policy DPUDiscovery<br />sets on the DPUDevices it creates. It is applied at creation time only: changing it<br />does not affect DPUDevices that already exist, and it is not consulted when a<br />DPUDevice is reconciled. When unset, the discovery controller uses OnInitialization. |  | Enum: [OnInitialization Never] <br />Optional: \{\} <br /> |
+
+
+#### K0smotronClusterManagerConfiguration
+
+
+
+K0smotronClusterManagerConfiguration configures the manager that hosts DPU control planes
+with k0smotron. It carries no deprecated image field, unlike the managers that predate it.
+
+
+
+_Appears in:_
+- [DPFOperatorConfigSpec](#dpfoperatorconfigspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `disable` _boolean_ | Disable ensures the component is not deployed when set to true. |  | Optional: \{\} <br /> |
+| `replicas` _integer_ | Replicas is the number of replicas for the controller deployment.<br />Used for High Availability via leader election. | 2 | Maximum: 3 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `controller` _[DefaultOverridesConfiguration](#defaultoverridesconfiguration)_ | Controller contains the configuration for the k0smotron Cluster Manager controller<br />component. It contains the image for the controller and its resource requirements. |  | Optional: \{\} <br /> |
+| `k0sVersion` _string_ | K0sVersion is the k0s version hosted control planes run, and the version their workers<br />download to match. Empty leaves the manager on the version this build ships. |  | Optional: \{\} <br /> |
+| `etcdStorageClassName` _string_ | EtcdStorageClassName backs each hosted control plane's etcd volume, applied when that<br />control plane is first created. Empty uses the cluster default, if the cluster has one. |  | Optional: \{\} <br /> |
 
 
 #### KamajiClusterManagerConfiguration

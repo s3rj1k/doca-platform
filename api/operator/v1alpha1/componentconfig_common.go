@@ -38,6 +38,7 @@ var (
 	SFCControllerName                   ComponentName = "sfc-controller"
 	KamajiClusterManagerName            ComponentName = "kamaji-cluster-manager"
 	StaticClusterManagerName            ComponentName = "static-cluster-manager"
+	K0smotronClusterManagerName         ComponentName = "k0smotron-cluster-manager"
 	BFBRegistryName                     ComponentName = "bfb-registry"
 	CNIInstallerName                    ComponentName = "cni-installer"
 	NodeSRIOVDevicePluginControllerName ComponentName = "nodesriovdeviceplugin-controller"
@@ -145,6 +146,9 @@ func (c *DPFOperatorConfig) ComponentConfigs() []ComponentConfigurable {
 	}
 	if c.Spec.StaticClusterManager != nil {
 		out = append(out, c.Spec.StaticClusterManager)
+	}
+	if c.Spec.K0smotronClusterManager != nil {
+		out = append(out, c.Spec.K0smotronClusterManager)
 	}
 	if c.Spec.CNIInstaller != nil {
 		out = append(out, c.Spec.CNIInstaller)
