@@ -32,6 +32,7 @@ import (
 	"github.com/nvidia/doca-platform/test/e2e/cleanup"
 	"github.com/nvidia/doca-platform/test/utils/netshoot"
 	kamajiv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/clastix/kamaji/api/v1alpha1"
+	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
 
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	. "github.com/onsi/ginkgo/v2"
@@ -109,6 +110,7 @@ type TestDomain struct {
 	Observability           string // Observability test suite
 	ImagePullSecretsSync    string // ImagePullSecrets sync/cleanup validation (opt out in CI via !ImagePullSecretsSync)
 	Performance             string // Performance test suite - applies MTU 9000 and extended DMS timeout
+	K0smotron               string // k0smotron cluster manager test suite - needs k0smotron installed
 }
 
 // Domain is the global instance of test label domains
@@ -137,6 +139,7 @@ var Domain = TestDomain{
 	Observability:           "Observability",
 	ImagePullSecretsSync:    "ImagePullSecretsSync",
 	Performance:             "Performance",
+	K0smotron:               "K0smotron",
 }
 
 var (
@@ -208,6 +211,7 @@ var (
 		&dpuservicev1.DPUServiceChainList{},
 		&dpuservicev1.DPUServiceInterfaceList{},
 		&kamajiv1.TenantControlPlaneList{},
+		&k0smotronv1.ClusterList{},
 		&operatorv1.DPFOperatorConfigList{},
 		encryptedSecretsExternalSecretList(),
 		encryptedSecretsClusterSecretStoreList(),

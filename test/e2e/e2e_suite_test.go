@@ -38,6 +38,7 @@ import (
 	nvipamv1 "github.com/nvidia/doca-platform/third_party/api/nvipam/api/v1alpha1"
 	argov1 "github.com/nvidia/doca-platform/third_party/forked/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	kamajiv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/clastix/kamaji/api/v1alpha1"
+	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
 
 	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
@@ -255,6 +256,7 @@ func TestE2E(t *testing.T) {
 	Expect(provisioningv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(nvipamv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(kamajiv1.AddToScheme(scheme.Scheme)).To(Succeed())
+	Expect(k0smotronv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(vpcv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(netattdefv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(maintenancev1alpha1.AddToScheme(scheme.Scheme)).To(Succeed())

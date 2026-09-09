@@ -710,6 +710,12 @@ test-e2e: stern ## Run e2e tests
 	STERN=$(STERN) $(CURDIR)/hack/scripts/log-collector.sh \
 	  go test -timeout 0 ./test/e2e/ $(E2E_TEST_DEFAULTS) $(E2E_TEST_ARGS)
 
+.PHONY: test-e2e-k0smotron
+# The negations are load bearing. Each domain runs its BeforeSuite unless the filter excludes
+# it by name, and would then demand config fields this suite has no use for.
+test-e2e-k0smotron: ## Run the k0smotron cluster manager e2e tests
+	$(MAKE) test-e2e E2E_TEST_ARGS='-ginkgo.label-filter="K0smotron && !SDN && !SNAP && !DPFVPCOVN && !Weave" -e2e.config=./config-k0smotron.yaml'
+
 .PHONY: generate-htmlreports
 generate-htmlreports: binary-dpfdev ## Generate HTML artifact viewers for all resource dumps under ARTIFACTS_DIR
 	$(LOCALBIN)/dpfdev htmlreport "$(ARTIFACTS_DIR)"

@@ -1,0 +1,21 @@
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUCluster
+metadata:
+  name: dpu-cluster-1
+  namespace: dpf-operator-system
+spec:
+  # The prefixed form DPUClusterSpec.Type reserves for an out of tree cluster manager.
+  type: k0smotron.io/k0smotron
+  maxNodes: 1000
+  # No clusterEndpoint, as k0smotron exposes the control plane through a NodePort
+  # Service itself. Keepalived is not involved and the field is ignored for this type.
+  #
+  # A partial k0smotron ClusterSpec merged over the one the cluster manager builds. These
+  # fields are ones the manager never sets, so they only reach the control plane this way.
+  clusterManagerConfig:
+    controlPlaneFlags:
+      - --enable-metrics-scraper=true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi

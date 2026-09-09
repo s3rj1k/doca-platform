@@ -202,6 +202,16 @@ func generateDPFOperatorConfig() *operatorv1.DPFOperatorConfig {
 		dpfOperatorConfig.Spec.Overrides.KubernetesAPIServerPort = ptr.To(apiServerPort)
 	}
 
+	if isGinkgoLabelApplied(Domain.K0smotron) {
+		// Disabled by default, and it needs k0smotron installed by the prereqs helmfile.
+		dpfOperatorConfig.Spec.K0smotronClusterManager = &operatorv1.K0smotronClusterManagerConfiguration{
+			BaseComponentConfig:  operatorv1.BaseComponentConfig{Disable: ptr.To(false)},
+			BaseControllerConfig: operatorv1.BaseControllerConfig{Replicas: ptr.To[int32](1)},
+			K0sVersion:           k0smotronK0sVersion,
+			EtcdStorageClassName: k0smotronEtcdStorageClass,
+		}
+	}
+
 	if isGinkgoLabelApplied(Domain.Scale) {
 		// For scale environments, the nodes are fake, therefore we can't have DPUDetector running
 		dpfOperatorConfig.Spec.DPUDetector = &operatorv1.DPUDetectorConfiguration{
@@ -842,5 +852,17 @@ func getProvisionDPUClustersInput() ProvisionDPUClustersInput {
 		DPUNodeBMCs:                 input.dpuNodeBMCs,
 		selectDPUDevicesDynamically: input.selectDPUDevicesDynamically,
 		operatorConfig:              input.config,
+		// A k0smotron control plane reports the k0s build, not the version DPF pins.
+		expectedKubernetesVersion: expectedDPUClusterKubernetesVersion(),
 	}
+}
+
+// expectedDPUClusterKubernetesVersion returns the Status.Version a DPUCluster should report.
+// Empty leaves ProvisionDPUClusters on util.KubernetesVersion, which is what kamaji serves.
+func expectedDPUClusterKubernetesVersion() string {
+	if isGinkgoLabelApplied(Domain.K0smotron) {
+		return k0smotronReportedVersion
+	}
+
+	return ""
 }

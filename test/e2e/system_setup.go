@@ -1323,6 +1323,13 @@ func getDPUClusterClient(ctx context.Context, input ProvisionDPUClustersInput, c
 		g.Expect(err).ToNot(HaveOccurred())
 	}).WithTimeout(3 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 
+	// NewTunneledRestConfig returns a nil tunnel for a cluster with no Kamaji resources,
+	// where the kubeconfig server URL is reached directly. There is nothing to monitor, and
+	// the health check below would dereference nil.
+	if tun == nil {
+		return
+	}
+
 	// Start a go routine that monitors the health of the tunnel and recreates the client and rest config
 	// if the health check fails.
 	go func() {
