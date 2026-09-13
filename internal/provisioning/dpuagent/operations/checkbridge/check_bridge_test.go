@@ -22,6 +22,7 @@ import (
 	"errors"
 	"net"
 
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	"github.com/nvidia/doca-platform/cmd/dpuagent/opts"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations"
 
@@ -80,6 +81,14 @@ var _ = Describe("CheckBridge", func() {
 		It("should return false when not in ZeroTrustMode", func() {
 			optCtx.Options.ZeroTrustMode = false
 			Expect(checkBridge.ShouldSkip(optCtx)).To(BeFalse())
+		})
+
+		It("should return true when the flavor supplies provisioning netplan", func() {
+			optCtx.Options.ZeroTrustMode = false
+			optCtx.DPUFlavor.Spec.ProvisioningNetwork = &provisioningv1.DPUProvisioningNetwork{
+				Netplan: "network:\n  version: 2\n",
+			}
+			Expect(checkBridge.ShouldSkip(optCtx)).To(BeTrue())
 		})
 	})
 

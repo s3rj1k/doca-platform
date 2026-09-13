@@ -42,10 +42,19 @@ write_files:
             accept-ra: false
             link-local: []
             optional: true
+{{- end}}
+{{- if .TmfifoNetwork}}
           tmfifo_net0:
             addresses:
             - fe80::2/64
             dhcp4: false
+{{- end}}
+{{- if .ProvisioningNetplan}}
+
+  - path: /etc/netplan/51-dpf-provisioning.yaml
+    permissions: '0600'
+    content: |
+{{indent 6 (trimAll "\n" .ProvisioningNetplan)}}
 {{- end}}
 
 {{- range .ConfigFiles}}

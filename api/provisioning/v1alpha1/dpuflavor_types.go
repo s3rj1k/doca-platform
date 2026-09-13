@@ -116,6 +116,24 @@ type DPUFlavorSpec struct {
 	// DPUAgentConfig configures the on-DPU provisioning agent.
 	// +optional
 	DPUAgentConfig *DPUAgentConfig `json:"dpuAgentConfig,omitempty"`
+
+	// ProvisioningNetwork configures the network the DPU uses to reach the control plane
+	// while it provisions.
+	// +optional
+	ProvisioningNetwork *DPUProvisioningNetwork `json:"provisioningNetwork,omitempty"`
+}
+
+// DPUProvisioningNetwork configures the DPU network used during provisioning.
+type DPUProvisioningNetwork struct {
+	// Netplan is a raw netplan document (a network: block with ethernets, bridges, vlans and DHCP
+	// or static addressing) that the DPU applies during provisioning to reach the control plane.
+	// When set, the dpu-agent writes it at high precedence and does not build its default pf0vf0
+	// comm channel, letting the operator drive the management network, for example an OOB port that
+	// routes to a remote HCP. Content is not validated by the API. The agent still keeps tmfifo_net0
+	// for the package fetch, so do not restate it here.
+	// +kubebuilder:validation:MaxLength=8192
+	// +optional
+	Netplan string `json:"netplan,omitempty"`
 }
 
 // DPUAgentConfig configures the on-DPU provisioning agent.

@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	"github.com/nvidia/doca-platform/cmd/dpuagent/opts"
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations"
 	pciutil "github.com/nvidia/doca-platform/internal/provisioning/utils/pci"
@@ -167,6 +168,68 @@ var _ = Describe("Netplan", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(applied).To(BeTrue())
+		})
+
+		It("[FlavorNetplan] writes the 99-zz file and skips the comm channel", func() {
+			applied := false
+			operation := &ConfigureNetwork{
+				netplanRoot: tempDir,
+				applyNetplanFunc: func() error {
+					applied = true
+					return nil
+				},
+				listPFRepsFunc: func() ([]string, error) {
+					return nil, nil
+				},
+			}
+			provisioning := "network:\n  version: 2\n  ethernets:\n    oob_net0:\n      dhcp4: true\n"
+			Expect(operation.Execute(ctx, &operations.Context{
+				Options: opts.Options{
+					ZeroTrustMode: false,
+				},
+				DiscoverPorts: discoverOnePort,
+				DPUFlavor: provisioningv1.DPUFlavor{
+					Spec: provisioningv1.DPUFlavorSpec{
+						ProvisioningNetwork: &provisioningv1.DPUProvisioningNetwork{
+							Netplan: provisioning,
+						},
+					},
+				},
+			})).To(Succeed())
+
+			By("writing the flavor netplan at high precedence")
+			content, err := os.ReadFile(filepath.Join(tempDir, "99-zz-dpf-provisioning.yaml"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(content)).To(Equal(provisioning))
+
+			By("not building the pf0vf0 comm channel")
+			_, err = os.Stat(filepath.Join(tempDir, "99-dpf-comm-ch.yaml"))
+			Expect(os.IsNotExist(err)).To(BeTrue())
+
+			By("still writing tmfifo for the package fetch")
+			_, err = os.Stat(filepath.Join(tempDir, "98-oob-tmfifo.yaml"))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(applied).To(BeTrue())
+		})
+
+		// The mirror of the above. Without a flavor netplan the agent must still build the comm
+		// channel, which is how a trusted host DPU reaches the control plane today.
+		It("[FlavorNetplan] builds the comm channel and no 99-zz file when the flavor is silent", func() {
+			operation := &ConfigureNetwork{
+				netplanRoot:      tempDir,
+				applyNetplanFunc: func() error { return nil },
+				listPFRepsFunc:   func() ([]string, error) { return nil, nil },
+			}
+			Expect(operation.Execute(ctx, &operations.Context{
+				Options:       opts.Options{ZeroTrustMode: false},
+				DiscoverPorts: discoverOnePort,
+			})).To(Succeed())
+
+			_, err := os.Stat(filepath.Join(tempDir, "99-dpf-comm-ch.yaml"))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = os.Stat(filepath.Join(tempDir, "99-zz-dpf-provisioning.yaml"))
+			Expect(os.IsNotExist(err)).To(BeTrue())
 		})
 
 		It("[BF4] should create PF MTU config for N/S uplinks and PF representors", func() {

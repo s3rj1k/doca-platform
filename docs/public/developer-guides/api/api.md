@@ -2747,6 +2747,7 @@ _Appears in:_
 | `dma` _[DPUFlavorDMA](#dpuflavordma)_ | DMA configures the DMA SF that e.g. SNAP DOCA service uses to DMA host<br />memory over the second Grace PCI link on BlueField-4 socket-direct<br />systems. |  | Optional: \{\} <br /> |
 | `serviceReadiness` _[ServiceReadiness](#servicereadiness)_ | serviceReadiness configures the Service Readiness phase. |  | Optional: \{\} <br /> |
 | `dpuAgentConfig` _[DPUAgentConfig](#dpuagentconfig)_ | DPUAgentConfig configures the on-DPU provisioning agent. |  | Optional: \{\} <br /> |
+| `provisioningNetwork` _[DPUProvisioningNetwork](#dpuprovisioningnetwork)_ | ProvisioningNetwork configures the network the DPU uses to reach the control plane<br />while it provisions. |  | Optional: \{\} <br /> |
 
 
 #### DPUFlavorTemplate
@@ -3040,6 +3041,22 @@ _Appears in:_
 | `Deleting` | DPUDeleting means the DPU CR will be deleted, controller will do some cleanup works.<br /> |
 | `Rebooting` | DPURebooting means the host of DPU is rebooting.<br /> |
 | `Perform ARM Force Restart` | DPUPerformArmForceRestart means ARM ForceRestart operations are in progress for Secure Boot configuration.<br /> |
+
+
+#### DPUProvisioningNetwork
+
+
+
+DPUProvisioningNetwork configures the DPU network used during provisioning.
+
+
+
+_Appears in:_
+- [DPUFlavorSpec](#dpuflavorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `netplan` _string_ | Netplan is a raw netplan document (a network: block with ethernets, bridges, vlans and DHCP<br />or static addressing) that the DPU applies during provisioning to reach the control plane.<br />When set, the dpu-agent writes it at high precedence and does not build its default pf0vf0<br />comm channel, letting the operator drive the management network, for example an OOB port that<br />routes to a remote HCP. Content is not validated by the API. The agent still keeps tmfifo_net0<br />for the package fetch, so do not restate it here. |  | MaxLength: 8192 <br />Optional: \{\} <br /> |
 
 
 #### DPURef

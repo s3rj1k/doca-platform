@@ -70,7 +70,10 @@ func (c *CheckBridge) ConditionType() string {
 }
 
 func (c *CheckBridge) ShouldSkip(ctx *operations.Context) bool {
-	return ctx.Options.ZeroTrustMode
+	// The comm channel bridge is not built for zero-trust, nor when the flavor drives the
+	// provisioning network with its own netplan, so there is no br-comm-ch to check.
+	return ctx.Options.ZeroTrustMode ||
+		(ctx.DPUFlavor.Spec.ProvisioningNetwork != nil && ctx.DPUFlavor.Spec.ProvisioningNetwork.Netplan != "")
 }
 
 func (c *CheckBridge) ShouldUpdateStatusBeforeContinue(ctx *operations.Context) bool {

@@ -515,6 +515,22 @@ spec:
                 x-kubernetes-validations:
                 - message: package names must be unique
                   rule: self.all(x, self.exists_one(y, x.name == y.name))
+              provisioningNetwork:
+                description: |-
+                  ProvisioningNetwork configures the network the DPU uses to reach the control plane
+                  while it provisions.
+                properties:
+                  netplan:
+                    description: |-
+                      Netplan is a raw netplan document (a network: block with ethernets, bridges, vlans and DHCP
+                      or static addressing) that the DPU applies during provisioning to reach the control plane.
+                      When set, the dpu-agent writes it at high precedence and does not build its default pf0vf0
+                      comm channel, letting the operator drive the management network, for example an OOB port that
+                      routes to a remote HCP. Content is not validated by the API. The agent still keeps tmfifo_net0
+                      for the package fetch, so do not restate it here.
+                    maxLength: 8192
+                    type: string
+                type: object
               serviceReadiness:
                 description: serviceReadiness configures the Service Readiness phase.
                 properties:

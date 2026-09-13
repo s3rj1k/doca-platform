@@ -100,10 +100,16 @@ type Params struct {
 	ConfigFiles          []WriteFile
 	OVSRawScript         string
 	OOBNetwork           bool
-	RedfishInterface     bool
-	BFBRegistryURL       string
-	AstraEnabled         bool
-	NICDeviceCount       int
+	// ProvisioningNetplan is a raw netplan document from the DPUFlavor, written as its own bootstrap
+	// file so the DPU reaches the control plane over its external port instead of the tmfifo default.
+	ProvisioningNetplan string
+	// TmfifoNetwork configures tmfifo_net0 on the DPU so it can fetch the agent package from the
+	// host over tmfifo. Set for host trusted installs, which serve that package over tmfifo.
+	TmfifoNetwork    bool
+	RedfishInterface bool
+	BFBRegistryURL   string
+	AstraEnabled     bool
+	NICDeviceCount   int
 	// SkipRebootMethodDiscovery stands MFT based reboot method discovery down, from the
 	// DPUFlavor. Needed where discovery picks a reset the card cannot perform.
 	SkipRebootMethodDiscovery bool
@@ -127,6 +133,9 @@ func (p *Params) ApplyFlavor(flavor *provisioningv1.DPUFlavor) error {
 	p.OVSRawScript = flavor.Spec.OVS.RawConfigScript
 	if flavor.Spec.DPUAgentConfig != nil {
 		p.SkipRebootMethodDiscovery = flavor.Spec.DPUAgentConfig.SkipOperations.RebootMethodDiscovery
+	}
+	if flavor.Spec.ProvisioningNetwork != nil {
+		p.ProvisioningNetplan = flavor.Spec.ProvisioningNetwork.Netplan
 	}
 	for _, f := range flavor.Spec.ConfigFiles {
 		if f.Type != nil && *f.Type != provisioningv1.ConfigFileTypeCloudInit {
@@ -184,6 +193,7 @@ func ResolveParams(ctx context.Context, controllerCtx *util.ControllerContext, d
 		KubeadmSecretNamespace: dpu.Namespace,
 		RedfishInterface:       isRedfish,
 		OOBNetwork:             isRedfish,
+		TmfifoNetwork:          !isRedfish,
 		ControlPlaneMTU:        controlPlaneMTU,
 		DPUName:                dpu.Name,
 		DPUNamespace:           dpu.Namespace,

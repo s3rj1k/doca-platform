@@ -401,6 +401,7 @@ network:
 			DPUName:                "dpu-1",
 			DPUNamespace:           "ns-1",
 			DPUAgentRepoURL:        "http://[fe80::1%25tmfifo_net0]:11029/deb",
+			TmfifoNetwork:          true,
 		})
 
 		netplanFile := getWriteFile(parsed, "/etc/netplan/50-dpf-bootstrap.yaml")
@@ -429,6 +430,175 @@ network:
 		for _, f := range parsed.WriteFiles {
 			Expect(f.Path).NotTo(Equal("/var/lib/dpf/dpuagent/bootstrap-kubeconfig"))
 		}
+	})
+
+	// The raw netplan is a full document written to its own 51 file. The stock 50 bootstrap file is
+	// unchanged, so tmfifo still comes up for the package fetch.
+	It("trusted host mode with provisioning netplan: writes the 51 file and keeps stock bootstrap", func() {
+		provisioning := skipFirstEmptyLine(`
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    oob_net0:
+      dhcp4: true
+      dhcp-identifier: mac
+  bridges:
+    br-comm-ch:
+      addresses:
+      - 169.254.99.1/32
+      interfaces:
+      - pf0vf0
+`)
+		_, parsed := generateAndParse(Params{
+			DPUHostName:            "test-dpu",
+			KubeadmSecretName:      "test-secret",
+			KubeadmSecretNamespace: "default",
+			ControlPlaneMTU:        1500,
+			DPUName:                "dpu-1",
+			DPUNamespace:           "ns-1",
+			DPUAgentRepoURL:        "http://[fe80::1%25tmfifo_net0]:11029/deb",
+			TmfifoNetwork:          true,
+			ProvisioningNetplan:    provisioning,
+		})
+
+		Expect(getWriteFile(parsed, "/etc/netplan/51-dpf-provisioning.yaml").Content).To(Equal(provisioning))
+
+		Expect(getWriteFile(parsed, "/etc/netplan/50-dpf-bootstrap.yaml").Content).To(Equal(skipFirstEmptyLine(`
+network:
+  renderer: networkd
+  version: 2
+  ethernets:
+    oob_net0:
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
+      optional: true
+    tmfifo_net0:
+      addresses:
+      - fe80::2/64
+      dhcp4: false
+`)))
+	})
+
+	// Zero trust also gets the 51 file, alongside its stock oob_net0 bootstrap and no tmfifo.
+	It("zero trust mode with provisioning netplan: writes the 51 file alongside stock oob", func() {
+		provisioning := skipFirstEmptyLine(`
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp3s0f0s0:
+      dhcp4: true
+      mtu: 9000
+`)
+		_, parsed := generateAndParse(Params{
+			DPUHostName:            "test-dpu",
+			KubeadmSecretName:      "test-secret",
+			KubeadmSecretNamespace: "default",
+			ControlPlaneMTU:        1500,
+			DPUName:                "dpu-1",
+			DPUNamespace:           "ns-1",
+			RedfishInterface:       true,
+			OOBNetwork:             true,
+			ProvisioningNetplan:    provisioning,
+		})
+
+		Expect(getWriteFile(parsed, "/etc/netplan/51-dpf-provisioning.yaml").Content).To(Equal(provisioning))
+
+		Expect(getWriteFile(parsed, "/etc/netplan/50-dpf-bootstrap.yaml").Content).To(Equal(skipFirstEmptyLine(`
+network:
+  renderer: networkd
+  version: 2
+  ethernets:
+    oob_net0:
+      dhcp4: true
+      dhcp6: false
+      accept-ra: false
+      mtu: 1500
+`)))
+	})
+
+	// The negative case for the new write_files entry, which is otherwise only ever asserted present.
+	It("writes no 51 file when the flavor supplies no provisioning netplan", func() {
+		_, parsed := generateAndParse(Params{
+			DPUHostName:            "test-dpu",
+			KubeadmSecretName:      "test-secret",
+			KubeadmSecretNamespace: "default",
+			ControlPlaneMTU:        1500,
+			DPUName:                "dpu-1",
+			DPUNamespace:           "ns-1",
+			TmfifoNetwork:          true,
+		})
+
+		for _, f := range parsed.WriteFiles {
+			Expect(f.Path).NotTo(Equal("/etc/netplan/51-dpf-provisioning.yaml"))
+		}
+	})
+
+	// The regression guard for splitting tmfifo out of the OOBNetwork branch. Both shapes have
+	// to render exactly what they rendered before the provisioning network field existed.
+	It("renders both stock netplans unchanged when no provisioning netplan is set", func() {
+		_, zeroTrust := generateAndParse(Params{
+			DPUHostName:            "test-dpu",
+			KubeadmSecretName:      "test-secret",
+			KubeadmSecretNamespace: "default",
+			ControlPlaneMTU:        1500,
+			DPUName:                "dpu-1",
+			DPUNamespace:           "ns-1",
+			RedfishInterface:       true,
+			OOBNetwork:             true,
+		})
+		Expect(getWriteFile(zeroTrust, "/etc/netplan/50-dpf-bootstrap.yaml").Content).To(Equal(skipFirstEmptyLine(`
+network:
+  renderer: networkd
+  version: 2
+  ethernets:
+    oob_net0:
+      dhcp4: true
+      dhcp6: false
+      accept-ra: false
+      mtu: 1500
+`)))
+
+		_, hostTrusted := generateAndParse(Params{
+			DPUHostName:            "test-dpu",
+			KubeadmSecretName:      "test-secret",
+			KubeadmSecretNamespace: "default",
+			ControlPlaneMTU:        1500,
+			DPUName:                "dpu-1",
+			DPUNamespace:           "ns-1",
+			TmfifoNetwork:          true,
+		})
+		Expect(getWriteFile(hostTrusted, "/etc/netplan/50-dpf-bootstrap.yaml").Content).To(Equal(skipFirstEmptyLine(`
+network:
+  renderer: networkd
+  version: 2
+  ethernets:
+    oob_net0:
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
+      optional: true
+    tmfifo_net0:
+      addresses:
+      - fe80::2/64
+      dhcp4: false
+`)))
+	})
+
+	It("should read the provisioning netplan off the DPUFlavor, tolerating no block", func() {
+		params := Params{DPUName: "dpu-1", DPUNamespace: "ns-1"}
+		Expect(params.ApplyFlavor(flavor)).To(Succeed())
+		Expect(params.ProvisioningNetplan).To(BeEmpty(), "the fixture flavor sets no provisioning network")
+
+		flavor.Spec.ProvisioningNetwork = &provisioningv1.DPUProvisioningNetwork{
+			Netplan: "network:\n  version: 2\n  ethernets:\n    oob_net0:\n      dhcp4: true\n",
+		}
+		Expect(params.ApplyFlavor(flavor)).To(Succeed())
+		Expect(params.ProvisioningNetplan).To(Equal("network:\n  version: 2\n  ethernets:\n    oob_net0:\n      dhcp4: true\n"))
 	})
 
 	It("trusted host mode with bootstrap kubeconfig: includes kubeconfig file and flag", func() {

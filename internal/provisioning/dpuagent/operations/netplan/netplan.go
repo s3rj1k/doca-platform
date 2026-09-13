@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations"
 	"github.com/nvidia/doca-platform/internal/provisioning/utils/bash"
@@ -102,7 +103,18 @@ func (n *ConfigureNetwork) configNetplan(ctx *operations.Context) error {
 	if err := n.setOOBAndRshimInterface(ctx.Options.ZeroTrustMode, ctx.Options.ControlPlaneMTU); err != nil {
 		return fmt.Errorf("failed to create 98-oob-tmfifo.yaml: %w", err)
 	}
-	if !ctx.Options.ZeroTrustMode {
+	var flavorNetplan string
+	if ctx.DPUFlavor.Spec.ProvisioningNetwork != nil {
+		flavorNetplan = ctx.DPUFlavor.Spec.ProvisioningNetwork.Netplan
+	}
+	if flavorNetplan != "" {
+		// The flavor drives the management network, so the operator owns the join path (for example
+		// an OOB port routing to a remote HCP). The 99-zz name beats the agent's own 98 and 99 files,
+		// and the pf0vf0 comm channel is not built.
+		if err := n.setProvisioningNetplan(flavorNetplan); err != nil {
+			return fmt.Errorf("failed to create 99-zz-dpf-provisioning.yaml: %w", err)
+		}
+	} else if !ctx.Options.ZeroTrustMode {
 		if err := n.setBridgeCommCh(ctx.Options.ControlPlaneMTU); err != nil {
 			return fmt.Errorf("failed to create 99-dpf-comm-ch.yaml: %w", err)
 		}
@@ -195,6 +207,17 @@ func (n *ConfigureNetwork) setBridgeCommCh(cpMTU int32) error {
 		},
 	}
 	return config.WriteToFile(name)
+}
+
+// setProvisioningNetplan writes the flavor supplied raw netplan verbatim to a high precedence file
+// so it wins over the agent's own 98 and 99 files.
+func (n *ConfigureNetwork) setProvisioningNetplan(content string) error {
+	name := filepath.Join(n.netplanRoot, "99-zz-dpf-provisioning.yaml")
+	if err := filesystem.MkdirAll(filepath.Dir(name), 0755); err != nil {
+		return fmt.Errorf("failed to create netplan directory: %w", err)
+	}
+	data := []byte(strings.TrimRight(content, "\n") + "\n")
+	return filesystem.AtomicWrite(name, data, 0600)
 }
 
 func (n *ConfigureNetwork) setPFMTU(ctx *operations.Context) error {

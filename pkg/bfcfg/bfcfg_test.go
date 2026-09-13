@@ -241,10 +241,19 @@ write_files:
             accept-ra: false
             link-local: []
             optional: true
+{{- end}}
+{{- if .TmfifoNetwork}}
           tmfifo_net0:
             addresses:
             - fe80::2/64
             dhcp4: false
+{{- end}}
+{{- if .ProvisioningNetplan}}
+
+  - path: /etc/netplan/51-dpf-provisioning.yaml
+    permissions: '0600'
+    content: |
+{{indent 6 (trimAll "\n" .ProvisioningNetplan)}}
 {{- end}}
 
 {{- range .ConfigFiles}}
@@ -376,6 +385,7 @@ EOF
 					DPUNamespace:           "ns-1",
 					DPUUID:                 "uid-123",
 					DPUAgentRepoURL:        "http://[fe80::1%25tmfifo_net0]:11029/deb",
+					TmfifoNetwork:          true,
 				}
 				Expect(params.ApplyFlavor(flavor)).To(Succeed())
 
@@ -646,6 +656,7 @@ EOF
 					KubeadmSecretNamespace: "default",
 					RedfishInterface:       false,
 					OOBNetwork:             false,
+					TmfifoNetwork:          true,
 					ControlPlaneMTU:        1500,
 					DPUName:                "dpu-1",
 					DPUNamespace:           "ns-1",
