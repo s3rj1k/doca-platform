@@ -200,6 +200,58 @@ var _ = Describe("Generate", func() {
 		flavorYAMLStr = string(flavorBytes)
 	})
 
+	It("should stand the kubelet operations down when the cluster runs a join payload", func() {
+		params := Params{
+			DPUName:        "dpu-1",
+			DPUNamespace:   "ns-1",
+			RunJoinPayload: true,
+		}
+		_, parsed := generateAndParse(params)
+		got := parseAgentConf(getWriteFile(parsed, agentConfPath).Content)
+
+		Expect(got).To(HaveKeyWithValue("skip-configure-kubelet", "true"))
+		Expect(got).To(HaveKeyWithValue("skip-start-kubelet", "true"))
+		Expect(got).To(HaveKeyWithValue("run-join-payload", "true"))
+		// Node labeling reads the kubelet kubeconfig from the kubeadm path, which a k0s
+		// worker never writes, so it has to go down with the other two.
+		Expect(got).To(HaveKeyWithValue("skip-node-labeling", "true"))
+	})
+
+	// A stray comment is word split into args, and the parser stops at the first of them,
+	// silently dropping every flag after it. Asserting on substrings does not catch that.
+	It("should emit an agent config that parses, with nothing dropped after the join flags", func() {
+		params := Params{
+			DPUName:             "dpu-1",
+			DPUNamespace:        "ns-1",
+			RunJoinPayload:      true,
+			BootstrapKubeconfig: "a-bootstrap-kubeconfig",
+		}
+		_, parsed := generateAndParse(params)
+		content := getWriteFile(parsed, agentConfPath).Content
+
+		for _, line := range strings.Split(content, "\n") {
+			Expect(strings.TrimSpace(line)).NotTo(HavePrefix("#"),
+				"a comment in %s is word split into arguments, not ignored", agentConfPath)
+		}
+
+		got := parseAgentConf(content)
+		Expect(got).To(HaveKeyWithValue("run-join-payload", "true"))
+		// Emitted after the join block, so it is the canary for early termination.
+		Expect(got).To(HaveKey("bootstrap-kubeconfig"))
+		Expect(got).To(HaveKeyWithValue("dpu-name", "dpu-1"))
+	})
+
+	It("should leave the kubeadm path alone by default", func() {
+		params := Params{
+			DPUName:      "dpu-1",
+			DPUNamespace: "ns-1",
+		}
+		userData, err := GenerateUserData(params)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(userData.Content).NotTo(ContainSubstring("--run-join-payload"))
+		Expect(userData.Content).NotTo(ContainSubstring("--skip-configure-kubelet"))
+	})
+
 	It("should stand reboot method discovery down when the flavor asks for it", func() {
 		params := Params{
 			DPUName:                   "dpu-1",
@@ -212,6 +264,22 @@ var _ = Describe("Generate", func() {
 
 		Expect(got).To(HaveKeyWithValue("skip-reboot-method-discovery", "true"))
 		// Emitted after the new stanza, so it catches the flag terminating the parse.
+		Expect(got).To(HaveKey("bootstrap-kubeconfig"))
+	})
+
+	It("should stand reboot method discovery down alongside a payload join", func() {
+		params := Params{
+			DPUName:                   "dpu-1",
+			DPUNamespace:              "ns-1",
+			RunJoinPayload:            true,
+			SkipRebootMethodDiscovery: true,
+			BootstrapKubeconfig:       "a-bootstrap-kubeconfig",
+		}
+		_, parsed := generateAndParse(params)
+		got := parseAgentConf(getWriteFile(parsed, agentConfPath).Content)
+
+		Expect(got).To(HaveKeyWithValue("run-join-payload", "true"))
+		Expect(got).To(HaveKeyWithValue("skip-reboot-method-discovery", "true"))
 		Expect(got).To(HaveKey("bootstrap-kubeconfig"))
 	})
 

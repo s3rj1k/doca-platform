@@ -99,6 +99,12 @@ write_files:
       --bfb-registry-url={{.BFBRegistryURL}}
 {{- end}}
       --kubeadm-secret-namespace={{.KubeadmSecretNamespace}}
+{{- if .RunJoinPayload}}
+      --skip-configure-kubelet=true
+      --skip-start-kubelet=true
+      --skip-node-labeling=true
+      --run-join-payload=true
+{{- end}}
 {{- if .SkipRebootMethodDiscovery}}
       --skip-reboot-method-discovery=true
 {{- end}}

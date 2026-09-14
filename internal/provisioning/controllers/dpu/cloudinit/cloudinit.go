@@ -110,6 +110,13 @@ type Params struct {
 	BFBRegistryURL   string
 	AstraEnabled     bool
 	NICDeviceCount   int
+	// RunJoinPayload stands the kubeadm shaped kubelet operations down, node labeling with
+	// them, and runs the payload the cluster manager rendered instead.
+	//
+	// Its flags reach /opt/dpf/dpuagent.conf, spliced onto a command line unquoted, so a
+	// comment there is word split into args and stops the parser. Keep that file flags only.
+	RunJoinPayload bool
+
 	// SkipRebootMethodDiscovery stands MFT based reboot method discovery down, from the
 	// DPUFlavor. Needed where discovery picks a reset the card cannot perform.
 	SkipRebootMethodDiscovery bool
@@ -209,6 +216,12 @@ func ResolveParams(ctx context.Context, controllerCtx *util.ControllerContext, d
 		return Params{}, operatorv1.DPFOperatorConfig{}, err
 	}
 	params.NICDeviceCount = nicDeviceCount
+
+	runJoinPayload, err := resolveRunJoinPayload(ctx, controllerCtx, dpu)
+	if err != nil {
+		return Params{}, operatorv1.DPFOperatorConfig{}, err
+	}
+	params.RunJoinPayload = runJoinPayload
 
 	if isRedfish {
 		if err := resolveRedfishRepoURLs(ctx, controllerCtx, &params); err != nil {
@@ -343,4 +356,23 @@ func resolveDPUDeviceNICDeviceCount(ctx context.Context, controllerCtx *util.Con
 			nicDeviceCount, dpuDevice.Namespace, dpuDevice.Name, provisioningconstants.MinNICDeviceCount, provisioningconstants.MaxNICDeviceCount)
 	}
 	return nicDeviceCount, nil
+}
+
+// resolveRunJoinPayload reports whether this DPU's cluster joins by running a rendered payload.
+// An unassigned DPU and a deleted cluster both answer false, leaving the kubeadm path in place.
+func resolveRunJoinPayload(ctx context.Context, controllerCtx *util.ControllerContext, dpu *provisioningv1.DPU) (bool, error) {
+	if strings.TrimSpace(dpu.Spec.Cluster.Name) == "" {
+		return false, nil
+	}
+
+	dc := &provisioningv1.DPUCluster{}
+	key := types.NamespacedName{Namespace: dpu.Spec.Cluster.Namespace, Name: dpu.Spec.Cluster.Name}
+	if err := controllerCtx.Get(ctx, key, dc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting DPUCluster %s to decide the join shape: %w", key, err)
+	}
+
+	return util.UsesJoinPayload(dc.Spec.Type), nil
 }

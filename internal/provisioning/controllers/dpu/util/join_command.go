@@ -59,6 +59,12 @@ func NewJoinCommandGenerators(c client.Client) *JoinCommandGenerators {
 	}
 }
 
+// UsesJoinPayload reports whether a cluster type joins by rendered payload, not a kubeadm
+// command. The answer drives both the cloud-init flags and what the agent then does.
+func UsesJoinPayload(clusterType string) bool {
+	return clusterType == K0smotronClusterType
+}
+
 // GenerateJoinCommand hands the cluster and the DPU to the generator its type names. An
 // unregistered type falls back to kubeadm, which is how kamaji and static already join.
 func (g *JoinCommandGenerators) GenerateJoinCommand(ctx context.Context, dc *provisioningv1.DPUCluster, dpu *provisioningv1.DPU) (string, error) {
