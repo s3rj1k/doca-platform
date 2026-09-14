@@ -90,6 +90,9 @@ write_files:
       --bfb-registry-url={{.BFBRegistryURL}}
 {{- end}}
       --kubeadm-secret-namespace={{.KubeadmSecretNamespace}}
+{{- if .SkipRebootMethodDiscovery}}
+      --skip-reboot-method-discovery=true
+{{- end}}
 {{- if .SpiffeMode}}
       --spiffe-mode=true
       --kubeconfig=/var/lib/dpf/dpuagent/kubeconfig

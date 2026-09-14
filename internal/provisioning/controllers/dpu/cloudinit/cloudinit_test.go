@@ -18,6 +18,8 @@ package cloudinit
 
 import (
 	"context"
+	"flag"
+	"io"
 	"path"
 	"strings"
 
@@ -131,6 +133,39 @@ users:
 `
 )
 
+// agentConfPath is the file systemd splices onto the dpuagent command line.
+const agentConfPath = "/opt/dpf/dpuagent.conf"
+
+// parseAgentConf consumes the agent config the way a DPU does. The unit word splits it through
+// `dpuagent $(cat <conf>)`, then the flag.FlagSet main.go builds parses it. Both steps matter.
+func parseAgentConf(content string) map[string]string {
+	fs := flag.NewFlagSet("dpuagent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	// Word splitting, as an unquoted command substitution does. A comment marker survives it.
+	args := strings.Fields(content)
+
+	// Declare every flag the content mentions, so parsing fails only on structure, never on
+	// an unknown flag. Values are captured as strings, which is all the assertions need.
+	seen := map[string]*string{}
+	for _, arg := range args {
+		name, _, ok := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if !ok || !strings.HasPrefix(arg, "--") || seen[name] != nil {
+			continue
+		}
+		captured := new(string)
+		seen[name] = captured
+		fs.StringVar(captured, name, "", "")
+	}
+	Expect(fs.Parse(args)).To(Succeed())
+	Expect(fs.Args()).To(BeEmpty(), "flag parsing stopped early at %v", fs.Args())
+
+	out := map[string]string{}
+	fs.Visit(func(f *flag.Flag) { out[f.Name] = f.Value.String() })
+
+	return out
+}
+
 var _ = Describe("Generate", func() {
 	var (
 		flavor        *provisioningv1.DPUFlavor
@@ -163,6 +198,43 @@ var _ = Describe("Generate", func() {
 		flavorBytes, err := yaml.Marshal(flavor)
 		Expect(err).NotTo(HaveOccurred())
 		flavorYAMLStr = string(flavorBytes)
+	})
+
+	It("should stand reboot method discovery down when the flavor asks for it", func() {
+		params := Params{
+			DPUName:                   "dpu-1",
+			DPUNamespace:              "ns-1",
+			SkipRebootMethodDiscovery: true,
+			BootstrapKubeconfig:       "a-bootstrap-kubeconfig",
+		}
+		_, parsed := generateAndParse(params)
+		got := parseAgentConf(getWriteFile(parsed, agentConfPath).Content)
+
+		Expect(got).To(HaveKeyWithValue("skip-reboot-method-discovery", "true"))
+		// Emitted after the new stanza, so it catches the flag terminating the parse.
+		Expect(got).To(HaveKey("bootstrap-kubeconfig"))
+	})
+
+	It("should leave reboot method discovery alone by default", func() {
+		params := Params{
+			DPUName:      "dpu-1",
+			DPUNamespace: "ns-1",
+		}
+		userData, err := GenerateUserData(params)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(userData.Content).NotTo(ContainSubstring("--skip-reboot-method-discovery"))
+	})
+
+	It("should read the skip off the DPUFlavor, and tolerate a flavor without the block", func() {
+		params := Params{DPUName: "dpu-1", DPUNamespace: "ns-1"}
+		Expect(params.ApplyFlavor(flavor)).To(Succeed())
+		Expect(params.SkipRebootMethodDiscovery).To(BeFalse(), "the fixture flavor does not ask for it")
+
+		flavor.Spec.DPUAgentConfig = &provisioningv1.DPUAgentConfig{
+			SkipOperations: provisioningv1.DPUAgentSkipOperations{RebootMethodDiscovery: true},
+		}
+		Expect(params.ApplyFlavor(flavor)).To(Succeed())
+		Expect(params.SkipRebootMethodDiscovery).To(BeTrue())
 	})
 
 	It("should return dpf.cfg with correct path, permissions, and static content", func() {

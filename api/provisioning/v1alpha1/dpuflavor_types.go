@@ -112,6 +112,25 @@ type DPUFlavorSpec struct {
 	// serviceReadiness configures the Service Readiness phase.
 	// +optional
 	ServiceReadiness *ServiceReadiness `json:"serviceReadiness,omitempty"`
+
+	// DPUAgentConfig configures the on-DPU provisioning agent.
+	// +optional
+	DPUAgentConfig *DPUAgentConfig `json:"dpuAgentConfig,omitempty"`
+}
+
+// DPUAgentConfig configures the on-DPU provisioning agent.
+type DPUAgentConfig struct {
+	// SkipOperations selects dpu-agent provisioning operations to skip on the node.
+	// +optional
+	SkipOperations DPUAgentSkipOperations `json:"skipOperations,omitempty"`
+}
+
+// DPUAgentSkipOperations selects dpu-agent provisioning operations to skip.
+type DPUAgentSkipOperations struct {
+	// RebootMethodDiscovery skips MFT based discovery of how the DPU can be rebooted, leaving
+	// the agent on its boot ID path. Set it where discovery picks a reset the card cannot do.
+	// +optional
+	RebootMethodDiscovery bool `json:"rebootMethodDiscovery,omitempty"`
 }
 
 // DPUFlavorDMA configures the DMA SF that the dpu-agent creates on

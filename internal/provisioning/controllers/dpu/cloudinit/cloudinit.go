@@ -104,6 +104,9 @@ type Params struct {
 	BFBRegistryURL       string
 	AstraEnabled         bool
 	NICDeviceCount       int
+	// SkipRebootMethodDiscovery stands MFT based reboot method discovery down, from the
+	// DPUFlavor. Needed where discovery picks a reset the card cannot perform.
+	SkipRebootMethodDiscovery bool
 
 	// SpiffeTokenExchangeEndpoint enables optional exchange before writing the token.
 	SpiffeTokenExchangeEndpoint string
@@ -122,6 +125,9 @@ func (p *Params) ApplyFlavor(flavor *provisioningv1.DPUFlavor) error {
 	p.DPUFlavorYAML = string(flavorBytes)
 	p.UbuntuPassword = ExtractUbuntuPassword(flavor)
 	p.OVSRawScript = flavor.Spec.OVS.RawConfigScript
+	if flavor.Spec.DPUAgentConfig != nil {
+		p.SkipRebootMethodDiscovery = flavor.Spec.DPUAgentConfig.SkipOperations.RebootMethodDiscovery
+	}
 	for _, f := range flavor.Spec.ConfigFiles {
 		if f.Type != nil && *f.Type != provisioningv1.ConfigFileTypeCloudInit {
 			continue

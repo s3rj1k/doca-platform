@@ -2264,6 +2264,38 @@ _Appears in:_
 | `status` _[DPUStatus](#dpustatus)_ |  | \{ phase:Initializing \} | Optional: \{\} <br /> |
 
 
+#### DPUAgentConfig
+
+
+
+DPUAgentConfig configures the on-DPU provisioning agent.
+
+
+
+_Appears in:_
+- [DPUFlavorSpec](#dpuflavorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `skipOperations` _[DPUAgentSkipOperations](#dpuagentskipoperations)_ | SkipOperations selects dpu-agent provisioning operations to skip on the node. |  | Optional: \{\} <br /> |
+
+
+#### DPUAgentSkipOperations
+
+
+
+DPUAgentSkipOperations selects dpu-agent provisioning operations to skip.
+
+
+
+_Appears in:_
+- [DPUAgentConfig](#dpuagentconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `rebootMethodDiscovery` _boolean_ | RebootMethodDiscovery skips MFT based discovery of how the DPU can be rebooted, leaving<br />the agent on its boot ID path. Set it where discovery picks a reset the card cannot do. |  | Optional: \{\} <br /> |
+
+
 #### DPUCluster
 
 
@@ -2714,6 +2746,7 @@ _Appears in:_
 | `ewNicConfigurations` _[NicConfiguration](#nicconfiguration) array_ | EWNicConfigurations lists per-NIC configuration for the E/W NICs.<br />Only the first entry is applied in this release; additional entries are ignored until a future<br />release adds multi-NIC support. The field is modeled as a list now so the API shape does not<br />need to change when multiple entries are supported. |  | MaxItems: 16 <br />Optional: \{\} <br /> |
 | `dma` _[DPUFlavorDMA](#dpuflavordma)_ | DMA configures the DMA SF that e.g. SNAP DOCA service uses to DMA host<br />memory over the second Grace PCI link on BlueField-4 socket-direct<br />systems. |  | Optional: \{\} <br /> |
 | `serviceReadiness` _[ServiceReadiness](#servicereadiness)_ | serviceReadiness configures the Service Readiness phase. |  | Optional: \{\} <br /> |
+| `dpuAgentConfig` _[DPUAgentConfig](#dpuagentconfig)_ | DPUAgentConfig configures the on-DPU provisioning agent. |  | Optional: \{\} <br /> |
 
 
 #### DPUFlavorTemplate

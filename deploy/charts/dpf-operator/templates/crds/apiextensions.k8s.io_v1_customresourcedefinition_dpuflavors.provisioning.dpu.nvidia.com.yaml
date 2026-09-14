@@ -153,6 +153,20 @@ spec:
                       value.
                     type: boolean
                 type: object
+              dpuAgentConfig:
+                description: DPUAgentConfig configures the on-DPU provisioning agent.
+                properties:
+                  skipOperations:
+                    description: SkipOperations selects dpu-agent provisioning operations
+                      to skip on the node.
+                    properties:
+                      rebootMethodDiscovery:
+                        description: |-
+                          RebootMethodDiscovery skips MFT based discovery of how the DPU can be rebooted, leaving
+                          the agent on its boot ID path. Set it where discovery picks a reset the card cannot do.
+                        type: boolean
+                    type: object
+                type: object
               dpuMode:
                 description: |-
                   DpuMode is deprecated and no longer used by provisioning workflows.
