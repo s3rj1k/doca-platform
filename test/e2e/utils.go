@@ -212,6 +212,7 @@ var (
 		&dpuservicev1.DPUServiceInterfaceList{},
 		&kamajiv1.TenantControlPlaneList{},
 		&k0smotronv1.ClusterList{},
+		&k0smotronv1.JoinTokenRequestList{},
 		&operatorv1.DPFOperatorConfigList{},
 		encryptedSecretsExternalSecretList(),
 		encryptedSecretsClusterSecretStoreList(),

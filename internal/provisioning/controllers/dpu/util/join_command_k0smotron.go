@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
@@ -62,6 +63,10 @@ const (
 
 	// joinTokenSecretKey is the Secret key k0smotron writes the worker token under.
 	joinTokenSecretKey = "token"
+
+	// joinTokenMintTimeout is how long a request may sit without a token before it is treated as
+	// one k0smotron will never mint. Minting itself takes about a second.
+	joinTokenMintTimeout = time.Minute
 )
 
 // k0sJoinScriptData is what join_k0s.sh.tmpl can reference.
@@ -153,8 +158,8 @@ func (g *K0smotronJoinTokenGenerator) k0sVersion(ctx context.Context, key types.
 	return cluster.Spec.Version, nil
 }
 
-// ensureJoinTokenRequest mints the token, reusing an existing request only when it still asks
-// for what this DPU needs and its Secret is still there.
+// ensureJoinTokenRequest mints the token, reusing an existing request unless it asks for something
+// else or its minted token has lost its Secret. Replacing takes two passes, see the delete below.
 func (g *K0smotronJoinTokenGenerator) ensureJoinTokenRequest(ctx context.Context, clusterKey types.NamespacedName, dpu *provisioningv1.DPU) error {
 	request := &k0smotronv1.JoinTokenRequest{
 		ObjectMeta: metav1.ObjectMeta{
@@ -189,6 +194,10 @@ func (g *K0smotronJoinTokenGenerator) ensureJoinTokenRequest(ctx context.Context
 		if err := g.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to replace JoinTokenRequest %s: %w", key, err)
 		}
+
+		// k0smotron finalizes the request before it goes, so creating now collides with the one
+		// still terminating and that create is lost. The next pass makes it once it has gone.
+		return fmt.Errorf("retired the stale JoinTokenRequest %s, waiting for it to go", key)
 	}
 
 	if err := g.Create(ctx, request); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -199,10 +208,16 @@ func (g *K0smotronJoinTokenGenerator) ensureJoinTokenRequest(ctx context.Context
 }
 
 // reusableJoinTokenRequest reports whether an existing request can be left alone. Not if it asks
-// for something else, the spec being immutable, nor if its Secret has gone, as an expired one has.
+// for something else, the spec being immutable, nor if a minted token has lost its Secret.
 func (g *K0smotronJoinTokenGenerator) reusableJoinTokenRequest(ctx context.Context, existing, desired *k0smotronv1.JoinTokenRequest) (bool, error) {
 	if existing.Spec.ClusterName != desired.Spec.ClusterName || existing.Spec.Role != desired.Spec.Role {
 		return false, nil
+	}
+
+	// k0smotron sets tokenID once it has minted, which takes about a second because it execs into
+	// the control plane. Until then an absent Secret says nothing, so the request is left alone.
+	if existing.Status.TokenID == "" {
+		return !unmintedTooLong(existing), nil
 	}
 
 	secretKey := types.NamespacedName{Namespace: existing.Namespace, Name: existing.Name}
@@ -215,6 +230,18 @@ func (g *K0smotronJoinTokenGenerator) reusableJoinTokenRequest(ctx context.Conte
 	}
 
 	return true, nil
+}
+
+// unmintedTooLong reports whether k0smotron has had long enough to mint a token. The window guards
+// against a manager that is not running at all, so it is generous rather than tuned to the exec.
+func unmintedTooLong(request *k0smotronv1.JoinTokenRequest) bool {
+	// No creation stamp is no evidence of age, and a zero time would read as ancient and retire a
+	// request that was just made.
+	if request.CreationTimestamp.IsZero() {
+		return false
+	}
+
+	return time.Since(request.CreationTimestamp.Time) > joinTokenMintTimeout
 }
 
 // joinToken reads the Secret k0smotron writes for a request. The Secret trails the request,

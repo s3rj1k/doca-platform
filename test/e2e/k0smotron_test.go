@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	"github.com/nvidia/doca-platform/pkg/dpucluster"
 	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
@@ -30,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -109,6 +111,57 @@ var _ = Describe("DPF System tests - k0smotron cluster manager", Labels{Domain.K
 				Expect(err).NotTo(HaveOccurred())
 				Expect(found).To(BeTrue())
 				Expect(profiles[0]).To(HaveKeyWithValue("name", k0smotronWorkerProfile))
+			}
+		})
+
+		// Guards a race that revoked the token as it was minted. k0smotron takes about a second
+		// to mint, while the provisioning controller retries in milliseconds.
+		It("should mint a join token without churning the request", func() {
+			for _, dpuCluster := range input.dpuClusters {
+				// GenerateJoinCommand reads nothing about the DPU from the API, so a bare value
+				// is enough to drive it against the suite's live k0smotron.
+				dpu := &provisioningv1.DPU{
+					ObjectMeta: metav1.ObjectMeta{Name: "jtr-race-probe", Namespace: dpuCluster.Namespace},
+				}
+				requestKey := client.ObjectKey{
+					Namespace: dpuCluster.Namespace,
+					Name:      dutil.K0smotronJoinTokenRequestName(dpu),
+				}
+				DeferCleanup(func() {
+					request := &k0smotronv1.JoinTokenRequest{}
+					request.Name, request.Namespace = requestKey.Name, requestKey.Namespace
+					Expect(client.IgnoreNotFound(input.client.Delete(ctx, request))).To(Succeed())
+				})
+
+				generator := &dutil.K0smotronJoinTokenGenerator{Client: input.client}
+
+				By("retrying the way the controller backoff does, before k0smotron has minted")
+				var firstUID types.UID
+				var joinScript string
+				Eventually(func(g Gomega) {
+					script, err := generator.GenerateJoinCommand(ctx, dpuCluster, dpu)
+
+					// Record the request the moment it exists, so a later replacement shows up.
+					observed := &k0smotronv1.JoinTokenRequest{}
+					if getErr := input.client.Get(ctx, requestKey, observed); getErr == nil && firstUID == "" {
+						firstUID = observed.UID
+					}
+
+					g.Expect(err).NotTo(HaveOccurred())
+					joinScript = script
+				}).WithTimeout(2 * time.Minute).WithPolling(10 * time.Millisecond).Should(Succeed())
+
+				// The template renders "$K0S_BIN" install worker, so assert on what it actually
+				// emits, and on the profile the control plane has to define.
+				Expect(joinScript).To(ContainSubstring("install worker"))
+				Expect(joinScript).To(ContainSubstring(k0smotronWorkerProfile))
+
+				By("the request that minted the token is the one that still exists")
+				settled := &k0smotronv1.JoinTokenRequest{}
+				Expect(input.client.Get(ctx, requestKey, settled)).To(Succeed())
+				Expect(firstUID).NotTo(BeEmpty())
+				Expect(settled.UID).To(Equal(firstUID),
+					"the request was replaced while k0smotron was minting, which revokes the token")
 			}
 		})
 

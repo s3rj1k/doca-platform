@@ -20,14 +20,17 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	k0smotronv1 "github.com/nvidia/doca-platform/third_party/forked/github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta2"
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -120,6 +123,12 @@ func TestK0smotronGenerateJoinCommand(t *testing.T) {
 				Name:      K0smotronJoinTokenRequestName(k0sTestDPUObject()),
 				Namespace: k0sTestNamespace,
 			},
+			Spec: k0smotronv1.JoinTokenRequestSpec{
+				ClusterName: k0sTestCluster,
+				Expiry:      k0smotronTokenExpiry,
+				Role:        k0smotronWorkerRole,
+			},
+			Status: k0smotronv1.JoinTokenRequestStatus{TokenID: "abcdef"},
 		}
 
 		c := k0sTestClient(k0smotronCluster("v1.33.1+k0s.0"), k0sTokenSecret("a-worker-token"), existing)
@@ -142,12 +151,20 @@ func TestK0smotronGenerateJoinCommand(t *testing.T) {
 				ClusterName: k0sTestCluster,
 				Role:        "worker",
 			},
+			// k0smotron minted this one, so a missing Secret really is an expiry rather than
+			// a Secret that has not been written yet.
+			Status: k0smotronv1.JoinTokenRequestStatus{TokenID: "abcdef"},
 		}
 		c := k0sTestClient(k0smotronCluster("v1.35.6+k0s.0"), stale)
 		gen := &K0smotronJoinTokenGenerator{Client: c}
 
-		// No token Secret, so the request is replaced and the caller retries for the new one.
+		// The stale request is retired, and deliberately not recreated in the same pass.
 		_, err := gen.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("retired the stale JoinTokenRequest"))
+
+		// The next pass finds it gone and mints a fresh one.
+		_, err = gen.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
 		g.Expect(err).To(HaveOccurred())
 
 		got := &k0smotronv1.JoinTokenRequest{}
@@ -169,7 +186,12 @@ func TestK0smotronGenerateJoinCommand(t *testing.T) {
 		c := k0sTestClient(k0smotronCluster("v1.35.6+k0s.0"), wrong, k0sTokenSecret("a-worker-token"))
 		gen := &K0smotronJoinTokenGenerator{Client: c}
 
+		// A wrong spec is retired regardless of status, and recreated on the next pass.
 		_, err := gen.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("retired the stale JoinTokenRequest"))
+
+		_, err = gen.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
 		g.Expect(err).NotTo(HaveOccurred())
 
 		got := &k0smotronv1.JoinTokenRequest{}
@@ -295,4 +317,134 @@ func TestJoinCommandGeneratorsDispatch(t *testing.T) {
 			g.Expect(strings.Contains(err.Error(), "install worker")).To(BeFalse())
 		}
 	})
+}
+
+// k0sJoinRequestKey names the JoinTokenRequest the generator mints for the test DPU.
+func k0sJoinRequestKey() types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: k0sTestNamespace,
+		Name:      K0smotronJoinTokenRequestName(k0sTestDPUObject()),
+	}
+}
+
+// TestK0smotronJoinTokenRequestSurvivesMinting guards a race that revoked the token as it was made.
+// A Secret that has not appeared yet used to look exactly like one whose token had expired.
+func TestK0smotronJoinTokenRequestSurvivesMinting(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	c := k0sTestClient(k0sTestDPUCluster(), k0smotronCluster("v1.35.6+k0s.0"))
+	generator := &K0smotronJoinTokenGenerator{Client: c}
+
+	// First pass creates the request. No Secret yet, which is reported so the caller comes back.
+	_, err := generator.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
+	g.Expect(err).To(HaveOccurred())
+
+	created := &k0smotronv1.JoinTokenRequest{}
+	g.Expect(c.Get(ctx, k0sJoinRequestKey(), created)).To(Succeed())
+	// Marks this exact object, so a delete and recreate is visible rather than silent.
+	created.Annotations = map[string]string{"test.dpf.nvidia.com/generation": "first"}
+	g.Expect(c.Update(ctx, created)).To(Succeed())
+
+	// Second pass, arriving the way the 5ms backoff does, long before k0smotron has minted.
+	_, err = generator.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
+	g.Expect(err).To(HaveOccurred())
+
+	survived := &k0smotronv1.JoinTokenRequest{}
+	g.Expect(c.Get(ctx, k0sJoinRequestKey(), survived)).To(Succeed())
+	g.Expect(survived.Annotations).To(HaveKeyWithValue("test.dpf.nvidia.com/generation", "first"),
+		"the request was replaced while k0smotron was still minting, which revokes the token")
+}
+
+// TestK0smotronJoinTokenRequestReplaced covers the cases that must still retire a request, so the
+// fix above does not turn into "never replace anything".
+func TestK0smotronJoinTokenRequestReplaced(t *testing.T) {
+	ctx := context.Background()
+
+	// minted carries a token ID, which is what k0smotron sets once it has run.
+	minted := func(mutate func(*k0smotronv1.JoinTokenRequest)) *k0smotronv1.JoinTokenRequest {
+		request := &k0smotronv1.JoinTokenRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        k0sJoinRequestKey().Name,
+				Namespace:   k0sJoinRequestKey().Namespace,
+				Annotations: map[string]string{"test.dpf.nvidia.com/generation": "first"},
+			},
+			Spec: k0smotronv1.JoinTokenRequestSpec{
+				ClusterName: k0sTestCluster,
+				Expiry:      k0smotronTokenExpiry,
+				Role:        k0smotronWorkerRole,
+			},
+			Status: k0smotronv1.JoinTokenRequestStatus{TokenID: "abcdef"},
+		}
+		if mutate != nil {
+			mutate(request)
+		}
+		return request
+	}
+
+	tests := []struct {
+		name    string
+		request *k0smotronv1.JoinTokenRequest
+	}{
+		{
+			name:    "a minted token whose Secret has gone",
+			request: minted(nil),
+		},
+		{
+			name: "a request that asks for another cluster",
+			request: minted(func(r *k0smotronv1.JoinTokenRequest) {
+				r.Spec.ClusterName = "somewhere-else"
+			}),
+		},
+		{
+			name: "a request that asks for the controller role",
+			request: minted(func(r *k0smotronv1.JoinTokenRequest) {
+				r.Spec.Role = "controller"
+			}),
+		},
+		{
+			// k0smotron never ran, so waiting on it forever would strand the DPU.
+			name: "a request k0smotron never minted, past the window",
+			request: minted(func(r *k0smotronv1.JoinTokenRequest) {
+				r.Status.TokenID = ""
+				r.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * joinTokenMintTimeout))
+			}),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			c := k0sTestClient(k0sTestDPUCluster(), k0smotronCluster("v1.35.6+k0s.0"), tc.request)
+			generator := &K0smotronJoinTokenGenerator{Client: c}
+
+			_, err := generator.GenerateJoinCommand(ctx, k0sTestDPUCluster(), k0sTestDPUObject())
+			g.Expect(err).To(HaveOccurred())
+
+			// Retired, and deliberately not recreated in the same pass. k0smotron finalizes the
+			// request before it goes, so a create here would collide with one still terminating.
+			replaced := &k0smotronv1.JoinTokenRequest{}
+			err = c.Get(ctx, k0sJoinRequestKey(), replaced)
+			if err == nil {
+				g.Expect(replaced.Annotations).NotTo(HaveKey("test.dpf.nvidia.com/generation"),
+					"the stale request was left in place")
+			} else {
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			}
+		})
+	}
+}
+
+func TestUnmintedTooLong(t *testing.T) {
+	g := NewWithT(t)
+
+	fresh := &k0smotronv1.JoinTokenRequest{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(time.Now())},
+	}
+	g.Expect(unmintedTooLong(fresh)).To(BeFalse())
+
+	stale := &k0smotronv1.JoinTokenRequest{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * joinTokenMintTimeout))},
+	}
+	g.Expect(unmintedTooLong(stale)).To(BeTrue())
 }
